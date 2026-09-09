@@ -12,7 +12,9 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing, Microsoft.VisualBas
 
 $AppName = 'FolderNest'
 $AppDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$DefaultDataDir = Join-Path $env:LOCALAPPDATA $AppName
+# Portable-first: data lives beside the program, so the whole folder can be
+# moved to another drive. If that location is read-only, fall back to LocalAppData.
+$DefaultDataDir = Join-Path $AppDir 'data'
 $ConfigPath = Join-Path $DefaultDataDir 'config.json'
 $StatePath = Join-Path $DefaultDataDir 'state.json'
 $LogPath = Join-Path $DefaultDataDir 'foldernest.log'
@@ -20,7 +22,16 @@ $MaxLogBytes = 10MB
 
 function Ensure-DataDir {
     $cfgDir = Split-Path -Parent $ConfigPath
-    if (-not (Test-Path -LiteralPath $cfgDir)) { New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null }
+    try {
+        if (-not (Test-Path -LiteralPath $cfgDir)) { New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null }
+        $probe = Join-Path $cfgDir '.write-test'; Set-Content -LiteralPath $probe -Value 'ok' -Encoding ASCII; Remove-Item -LiteralPath $probe -Force
+    } catch {
+        $script:ConfigPath = Join-Path (Join-Path $env:LOCALAPPDATA $AppName) 'config.json'
+        $script:StatePath = Join-Path (Join-Path $env:LOCALAPPDATA $AppName) 'state.json'
+        $script:LogPath = Join-Path (Join-Path $env:LOCALAPPDATA $AppName) 'foldernest.log'
+        $cfgDir = Split-Path -Parent $ConfigPath
+        if (-not (Test-Path -LiteralPath $cfgDir)) { New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null }
+    }
 }
 function Save-JsonAtomic($Value, [string]$Path) {
     $tmp = "$Path.$PID.tmp"

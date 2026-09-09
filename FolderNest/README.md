@@ -13,7 +13,7 @@ FolderNest 是一个 Windows 本地文件夹保管期限管理工具。它把监
 - WinForms 勾选清单；
 - 移入回收站或永久删除；
 - 10 MB 日志上限；
-- 可将程序目录放在任意磁盘。
+- 便携运行：整个目录可放在任意磁盘；数据默认保存在程序旁的 `data` 文件夹。
 
 ## 使用
 
@@ -24,7 +24,7 @@ powershell -ExecutionPolicy Bypass -File .\FolderNest.ps1 -Run
 powershell -ExecutionPolicy Bypass -File .\FolderNest.ps1 -Review
 ```
 
-默认配置和状态保存在 `%LOCALAPPDATA%\FolderNest`。后续正式版将把这部分改为可在设置中选择的数据目录，并发布单文件 EXE 安装包和便携 ZIP。
+便携版配置、状态和日志默认保存在程序旁的 `data` 文件夹；如果程序目录不可写，则自动回退到 `%LOCALAPPDATA%\FolderNest`。后续正式版将提供图形化数据目录选择，并发布单文件 EXE 安装包和便携 ZIP。
 
 ## 安全说明
 
