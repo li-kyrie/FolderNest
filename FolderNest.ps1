@@ -84,7 +84,7 @@ function Show-ReviewWindow {
     $script:ReviewMode=$null;$form.Add_FormClosed({if($script:ReviewMode){$chosen=@($grid.Rows|Where-Object{$_.Cells[0].Value}|ForEach-Object{$_.Tag});foreach($p in $chosen){if(Remove-Record $p $script:ReviewMode){$p.Pending=$false}};Save-JsonAtomic $state $StatePath;$script:ReviewMode=$null}});$form.ShowDialog()|Out-Null
 }
 function Show-MonitorDialog($Existing) {
-    $f=New-Object Windows.Forms.Form;$f.Text=if($Existing){'编辑监控目录'}else{'添加监控目录'};$f.Width=560;$f.Height=240;$f.StartPosition='CenterParent';$table=New-Object Windows.Forms.TableLayoutPanel;$table.Dock='Fill';$table.ColumnCount=3;$table.RowCount=5;$table.Padding='10';$table.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute,100)))|Out-Null;$table.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent,100)))|Out-Null;$table.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute,90)))|Out-Null;$f.Controls.Add($table)
+    $f=New-Object Windows.Forms.Form;$f.Text=if($Existing){'编辑监控目录'}else{'添加监控目录'};$f.Width=560;$f.Height=240;$f.StartPosition='CenterParent';$table=New-Object Windows.Forms.TableLayoutPanel;$table.Dock='Fill';$table.ColumnCount=3;$table.RowCount=5;$table.Padding=[Windows.Forms.Padding]::new(10);$table.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute,100)))|Out-Null;$table.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent,100)))|Out-Null;$table.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute,90)))|Out-Null;$f.Controls.Add($table)
     $table.Controls.Add((New-Object Windows.Forms.Label -Property @{Text='目录';AutoSize=$true}),0,0);$path=New-Object Windows.Forms.TextBox;$path.Dock='Fill';if($Existing){$path.Text=$Existing.Path};$table.Controls.Add($path,1,0);$browse=New-Object Windows.Forms.Button;$browse.Text='浏览...';$table.Controls.Add($browse,2,0);$browse.Add_Click({$d=New-Object Windows.Forms.FolderBrowserDialog;if($d.ShowDialog() -eq [Windows.Forms.DialogResult]::OK){$path.Text=$d.SelectedPath}})
     $table.Controls.Add((New-Object Windows.Forms.Label -Property @{Text='保留天数';AutoSize=$true}),0,1);$days=New-Object Windows.Forms.NumericUpDown;$days.Minimum=1;$days.Maximum=36500;$days.Value=if($Existing){[decimal]$Existing.Days}else{30};$table.Controls.Add($days,1,1)
     $table.Controls.Add((New-Object Windows.Forms.Label -Property @{Text='删除模式';AutoSize=$true}),0,2);$mode=New-Object Windows.Forms.ComboBox;$mode.DropDownStyle='DropDownList';[void]$mode.Items.Add('RecycleBin');[void]$mode.Items.Add('Permanent');$mode.SelectedItem=if($Existing){$Existing.DeleteMode}else{'RecycleBin'};$table.Controls.Add($mode,1,2)
@@ -95,7 +95,7 @@ function Show-MainWindow {
     $form=New-Object Windows.Forms.Form;$form.Text='FolderNest';$form.Width=920;$form.Height=560;$form.StartPosition='CenterScreen'
     $grid=New-Object Windows.Forms.DataGridView;$grid.Dock='Fill';$grid.AllowUserToAddRows=$false;$grid.AutoGenerateColumns=$false;$grid.SelectionMode='FullRowSelect';$grid.MultiSelect=$false
     foreach($x in @(@('状态','Enabled',65),@('监控目录','Path',520),@('天数','Days',65),@('删除模式','DeleteMode',110))){$col=New-Object Windows.Forms.DataGridViewTextBoxColumn;$col.HeaderText=$x[0];$col.Name=$x[1];$col.Width=$x[2];$grid.Columns.Add($col)|Out-Null}
-    $top=New-Object Windows.Forms.FlowLayoutPanel;$top.Dock='Top';$top.Height=42;$top.Padding='5';$bottom=New-Object Windows.Forms.StatusStrip;$status=New-Object Windows.Forms.ToolStripStatusLabel;$status.Text='就绪';[void]$bottom.Items.Add($status);$form.Controls.Add($grid);$form.Controls.Add($top);$form.Controls.Add($bottom)
+    $top=New-Object Windows.Forms.FlowLayoutPanel;$top.Dock='Top';$top.Height=42;$top.Padding=[Windows.Forms.Padding]::new(5);$bottom=New-Object Windows.Forms.StatusStrip;$status=New-Object Windows.Forms.ToolStripStatusLabel;$status.Text='就绪';[void]$bottom.Items.Add($status);$form.Controls.Add($grid);$form.Controls.Add($top);$form.Controls.Add($bottom)
     $cfg=Load-Config
     function Refresh-Grid {$grid.Rows.Clear();foreach($m in @($cfg.Monitors)){$i=$grid.Rows.Add();$grid.Rows[$i].Cells['Enabled'].Value=if($m.Enabled){'启用'}else{'停用'};$grid.Rows[$i].Cells['Path'].Value=$m.Path;$grid.Rows[$i].Cells['Days'].Value=$m.Days;$grid.Rows[$i].Cells['DeleteMode'].Value=$m.DeleteMode;$grid.Rows[$i].Tag=$m};$status.Text="已配置 $(@($cfg.Monitors).Count) 个监控目录"}
     function Add-UiButton([string]$Text,[string]$Tag){$b=New-Object Windows.Forms.Button;$b.Text=$Text;$b.Tag=$Tag;$b.Width=105;$top.Controls.Add($b)|Out-Null;return $b}
@@ -103,6 +103,17 @@ function Show-MainWindow {
     $add.Add_Click({$m=Show-MonitorDialog $null;if($m){$cfg.Monitors=@($cfg.Monitors)+$m;Save-JsonAtomic $cfg $ConfigPath;Refresh-Grid}});$edit.Add_Click({if($grid.SelectedRows.Count){$m=Show-MonitorDialog $grid.SelectedRows[0].Tag;if($m){$old=$grid.SelectedRows[0].Tag;$idx=[array]::IndexOf(@($cfg.Monitors),$old);$cfg.Monitors[$idx]=$m;Save-JsonAtomic $cfg $ConfigPath;Refresh-Grid}}});$toggle.Add_Click({if($grid.SelectedRows.Count){$m=$grid.SelectedRows[0].Tag;$m.Enabled=-not [bool]$m.Enabled;Save-JsonAtomic $cfg $ConfigPath;Refresh-Grid}});$remove.Add_Click({if($grid.SelectedRows.Count){$m=$grid.SelectedRows[0].Tag;if([Windows.Forms.MessageBox]::Show("仅删除监控设置，不删除目录内容：`n$($m.Path)",'FolderNest',[Windows.Forms.MessageBoxButtons]::YesNo)-eq [Windows.Forms.DialogResult]::Yes){$cfg.Monitors=@($cfg.Monitors|Where-Object Id -ne $m.Id);$s=Load-State;$s.Units=@($s.Units|Where-Object MonitorId -ne $m.Id);Save-JsonAtomic $cfg $ConfigPath;Save-JsonAtomic $s $StatePath;Refresh-Grid}}});$scan.Add_Click({$n=Scan-All $false;$status.Text="扫描完成，待处理 $n 项"});$review.Add_Click({Show-ReviewWindow;Refresh-Grid});$log.Add_Click({if(Test-Path -LiteralPath $LogPath){Start-Process notepad.exe -ArgumentList "`"$LogPath`""}});$install.Add_Click({Install-Tasks;$status.Text='已安装任务'});$uninstall.Add_Click({Uninstall-Tasks;$status.Text='已卸载任务'});$exit.Add_Click({$form.Close()});Refresh-Grid;$form.ShowDialog()|Out-Null
 }
 function Install-Tasks {$tr="powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" -Run";schtasks.exe /Create /TN "$AppName Daily" /TR $tr /SC DAILY /ST 02:00 /F|Out-Null;schtasks.exe /Create /TN "$AppName Logon" /TR $tr /SC ONLOGON /F|Out-Null;Log '已安装任务计划'}
-function Uninstall-Tasks {schtasks.exe /Delete /TN "$AppName Daily" /F 2>$null;schtasks.exe /Delete /TN "$AppName Logon" /F 2>$null;Log '已卸载任务计划'}
+function Uninstall-Tasks {
+    foreach($taskName in @("$AppName Daily", "$AppName Logon")){
+        # schtasks returns an error when a task does not exist. Check first so
+        # uninstall remains repeatable and does not trip ErrorActionPreference=Stop.
+        & cmd.exe /d /c "schtasks.exe /Query /TN `"$taskName`" >nul 2>&1"
+        if($LASTEXITCODE -eq 0){
+            & cmd.exe /d /c "schtasks.exe /Delete /TN `"$taskName`" /F >nul 2>&1"
+            if($LASTEXITCODE -ne 0){Log "卸载任务失败：$taskName"}
+        }
+    }
+    Log '已卸载任务计划'
+}
 
 if($Install){Install-Tasks;exit};if($Uninstall){Uninstall-Tasks;exit};if($Run){[void](Scan-All $true);exit};if($Review){Show-ReviewWindow;exit};if($Settings){Show-MainWindow;exit};Show-MainWindow
