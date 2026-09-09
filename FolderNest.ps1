@@ -34,9 +34,21 @@ function Log([string]$Message) {
     Ensure-DataDir; Add-Content -LiteralPath $LogPath -Value ("{0:yyyy-MM-dd HH:mm:ss}`t{1}" -f (Get-Date),$Message) -Encoding UTF8
     if((Get-Item -LiteralPath $LogPath).Length -gt $MaxLogBytes){$lines=@(Get-Content -LiteralPath $LogPath -Encoding UTF8);$keep=[Math]::Max(1,[int]($lines.Count*.6));$lines[($lines.Count-$keep)..($lines.Count-1)]|Set-Content -LiteralPath $LogPath -Encoding UTF8}
 }
+function Ensure-MonitorProperties($Monitor) {
+    if(-not ($Monitor.PSObject.Properties.Name -contains 'Scheduled')) { Add-Member -InputObject $Monitor -NotePropertyName Scheduled -NotePropertyValue $true }
+    if(-not ($Monitor.PSObject.Properties.Name -contains 'Enabled')) { Add-Member -InputObject $Monitor -NotePropertyName Enabled -NotePropertyValue $true }
+    return $Monitor
+}
 function Load-Config {
     Ensure-DataDir
-    if(Test-Path -LiteralPath $ConfigPath){$c=Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8|ConvertFrom-Json;if($c.PSObject.Properties.Name -contains 'Monitors'){return $c};if($c.PSObject.Properties.Name -contains 'Root' -and $c.Root){return [pscustomobject]@{Monitors=@([pscustomobject]@{Id=[guid]::NewGuid().ToString();Path=$c.Root;Days=[int]$c.Days;DeleteMode=$c.DeleteMode;Enabled=$true})}}}
+    if(Test-Path -LiteralPath $ConfigPath){
+        $c=Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8|ConvertFrom-Json
+        if($c.PSObject.Properties.Name -contains 'Monitors'){
+            foreach($m in @($c.Monitors)){Ensure-MonitorProperties $m|Out-Null}
+            return $c
+        }
+        if($c.PSObject.Properties.Name -contains 'Root' -and $c.Root){return [pscustomobject]@{Monitors=@([pscustomobject]@{Id=[guid]::NewGuid().ToString();Path=$c.Root;Days=[int]$c.Days;DeleteMode=$c.DeleteMode;Enabled=$true;Scheduled=$true})}}
+    }
     return [pscustomobject]@{Monitors=@()}
 }
 function Load-State { Ensure-DataDir; if(Test-Path -LiteralPath $StatePath){return Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8|ConvertFrom-Json};return [pscustomobject]@{LastScanDate='';Units=@()}}
@@ -48,11 +60,12 @@ function Get-Units([string]$Root) {
     return @($out)
 }
 function Find-Unit($State,[string]$MonitorId,[string]$Path){@($State.Units|Where-Object{$_.MonitorId -eq $MonitorId -and $_.Path -ieq $Path}|Select-Object -First 1)[0]}
-function Scan-All([bool]$Notify) {
+function Scan-All([bool]$Notify,[bool]$ScheduledOnly=$false) {
     $cfg=Load-Config;$state=Load-State;$new=New-Object System.Collections.ArrayList;$cutoff=[datetime]::UtcNow.AddDays(-1);$total=0
-    foreach($m in @($cfg.Monitors|Where-Object Enabled)){
+    $monitors=@($cfg.Monitors|Where-Object{$_.Enabled -and (-not $ScheduledOnly -or $_.Scheduled -ne $false)})
+    foreach($m in $monitors){
         if(-not(Test-Path -LiteralPath $m.Path -PathType Container)){Log "跳过监控目录（不存在）：$($m.Path)";continue};$cutoff=[datetime]::UtcNow.AddDays(-[int]$m.Days)
-        foreach($u in Get-Units $m.Path){$old=Find-Unit $state $m.Id $u.Path;if($null -eq $old){$old=[pscustomobject]@{MonitorId=$m.Id;Path=$u.Path;IsFolder=$u.IsFolder;FirstSeen=[datetime]::UtcNow.ToString('o');Pending=$false}};$first=[datetime]::Parse($old.FirstSeen).ToUniversalTime();$latest=[datetime]::Parse($u.Latest).ToUniversalTime();$effective=if($latest -gt $first){$latest}else{$first};$old.IsFolder=$u.IsFolder;$old.Latest=$u.Latest;$old.Size=$u.Size;$old.Count=$u.Count;$old.Effective=$effective.ToString('o');if($effective -lt $cutoff){$old.Pending=$true};[void]$new.Add($old)}
+        foreach($u in Get-Units $m.Path){$old=Find-Unit $state $m.Id $u.Path;if($null -eq $old){$old=[pscustomobject]@{MonitorId=$m.Id;Path=$u.Path;IsFolder=$u.IsFolder;FirstSeen=[datetime]::UtcNow.ToString('o');Latest='';Size=0;Count=0;Effective='';Pending=$false}}else{foreach($p in @(@('Latest',''),@('Size',0),@('Count',0),@('Effective',''))){if(-not ($old.PSObject.Properties.Name -contains $p[0])){Add-Member -InputObject $old -NotePropertyName $p[0] -NotePropertyValue $p[1]}}};$first=[datetime]::Parse($old.FirstSeen).ToUniversalTime();$latest=[datetime]::Parse($u.Latest).ToUniversalTime();$effective=if($latest -gt $first){$latest}else{$first};$old.IsFolder=$u.IsFolder;$old.Latest=$u.Latest;$old.Size=$u.Size;$old.Count=$u.Count;$old.Effective=$effective.ToString('o');if($effective -lt $cutoff){$old.Pending=$true};[void]$new.Add($old)}
     }
     $state.Units=@($new);$state.LastScanDate=(Get-Date).ToString('yyyy-MM-dd');Save-JsonAtomic $state $StatePath;$pending=@($state.Units|Where-Object Pending);$total=$pending.Count;Log "扫描完成：待处理 $total 项";if($Notify -and $total -gt 0){Show-Notification $total};return $total
 }
@@ -84,25 +97,43 @@ function Show-ReviewWindow {
     $script:ReviewMode=$null;$form.Add_FormClosed({if($script:ReviewMode){$chosen=@($grid.Rows|Where-Object{$_.Cells[0].Value}|ForEach-Object{$_.Tag});foreach($p in $chosen){if(Remove-Record $p $script:ReviewMode){$p.Pending=$false}};Save-JsonAtomic $state $StatePath;$script:ReviewMode=$null}});$form.ShowDialog()|Out-Null
 }
 function Show-MonitorDialog($Existing) {
-    $f=New-Object Windows.Forms.Form;$f.Text=if($Existing){'编辑监控目录'}else{'添加监控目录'};$f.Width=620;$f.Height=260;$f.StartPosition='CenterParent';$table=New-Object Windows.Forms.TableLayoutPanel;$table.Dock='Fill';$table.ColumnCount=3;$table.RowCount=5;$table.Padding=[Windows.Forms.Padding]::new(10);$table.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute,100)))|Out-Null;$table.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent,100)))|Out-Null;$table.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute,100)))|Out-Null;$f.Controls.Add($table)
+    $f=New-Object Windows.Forms.Form;$f.Text=if($Existing){'编辑监控目录'}else{'添加监控目录'};$f.Width=560;$f.Height=240;$f.StartPosition='CenterParent';$table=New-Object Windows.Forms.TableLayoutPanel;$table.Dock='Fill';$table.ColumnCount=3;$table.RowCount=5;$table.Padding=[Windows.Forms.Padding]::new(10);$table.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute,100)))|Out-Null;$table.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent,100)))|Out-Null;$table.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Absolute,90)))|Out-Null;$f.Controls.Add($table)
     $table.Controls.Add((New-Object Windows.Forms.Label -Property @{Text='目录';AutoSize=$true}),0,0);$path=New-Object Windows.Forms.TextBox;$path.Dock='Fill';if($Existing){$path.Text=$Existing.Path};$table.Controls.Add($path,1,0);$browse=New-Object Windows.Forms.Button;$browse.Text='浏览...';$table.Controls.Add($browse,2,0);$browse.Add_Click({$d=New-Object Windows.Forms.FolderBrowserDialog;if($d.ShowDialog() -eq [Windows.Forms.DialogResult]::OK){$path.Text=$d.SelectedPath}})
     $table.Controls.Add((New-Object Windows.Forms.Label -Property @{Text='保留天数';AutoSize=$true}),0,1);$days=New-Object Windows.Forms.NumericUpDown;$days.Minimum=1;$days.Maximum=36500;$days.Value=if($Existing){[decimal]$Existing.Days}else{30};$table.Controls.Add($days,1,1)
     $table.Controls.Add((New-Object Windows.Forms.Label -Property @{Text='删除模式';AutoSize=$true}),0,2);$mode=New-Object Windows.Forms.ComboBox;$mode.DropDownStyle='DropDownList';[void]$mode.Items.Add('RecycleBin');[void]$mode.Items.Add('Permanent');$mode.SelectedItem=if($Existing){$Existing.DeleteMode}else{'RecycleBin'};$table.Controls.Add($mode,1,2)
     $enabled=New-Object Windows.Forms.CheckBox;$enabled.Text='启用此监控目录';$enabled.AutoSize=$true;$enabled.Checked=if($Existing){[bool]$Existing.Enabled}else{$true};$table.Controls.Add($enabled,1,3)
-    $ok=New-Object Windows.Forms.Button;$ok.Text='保存';$cancel=New-Object Windows.Forms.Button;$cancel.Text='取消';$table.Controls.Add($ok,1,4);$table.Controls.Add($cancel,2,4);$resultHolder=[pscustomobject]@{Value=$null};$ok.Add_Click({if([string]::IsNullOrWhiteSpace($path.Text)-or-not(Test-Path -LiteralPath $path.Text -PathType Container)){[Windows.Forms.MessageBox]::Show('请选择存在的文件夹。','FolderNest')|Out-Null;return};$id=if($Existing){$Existing.Id}else{[guid]::NewGuid().ToString()};$resultHolder.Value=[pscustomobject]@{Id=$id;Path=$path.Text.Trim();Days=[int]$days.Value;DeleteMode=[string]$mode.SelectedItem;Enabled=[bool]$enabled.Checked};$f.DialogResult=[Windows.Forms.DialogResult]::OK;$f.Close()});$cancel.Add_Click({$f.DialogResult=[Windows.Forms.DialogResult]::Cancel;$f.Close()});$f.ShowDialog()|Out-Null;return $resultHolder.Value
+    $ok=New-Object Windows.Forms.Button;$ok.Text='保存';$cancel=New-Object Windows.Forms.Button;$cancel.Text='取消';$table.Controls.Add($ok,1,4);$table.Controls.Add($cancel,2,4);$resultHolder=[pscustomobject]@{Value=$null};$ok.Add_Click({if([string]::IsNullOrWhiteSpace($path.Text)-or-not(Test-Path -LiteralPath $path.Text -PathType Container)){[Windows.Forms.MessageBox]::Show('请选择存在的文件夹。','FolderNest')|Out-Null;return};$id=if($Existing){$Existing.Id}else{[guid]::NewGuid().ToString()};$resultHolder.Value=[pscustomobject]@{Id=$id;Path=$path.Text.Trim();Days=[int]$days.Value;DeleteMode=[string]$mode.SelectedItem;Enabled=[bool]$enabled.Checked;Scheduled=if($Existing){$Existing.Scheduled -ne $false}else{$true}};$f.DialogResult=[Windows.Forms.DialogResult]::OK;$f.Close()});$cancel.Add_Click({$f.DialogResult=[Windows.Forms.DialogResult]::Cancel;$f.Close()});$f.ShowDialog()|Out-Null;return $resultHolder.Value
 }
 function Show-MainWindow {
     $form=New-Object Windows.Forms.Form;$form.Text='FolderNest';$form.Width=920;$form.Height=560;$form.StartPosition='CenterScreen'
     $grid=New-Object Windows.Forms.DataGridView;$grid.Dock='Fill';$grid.AllowUserToAddRows=$false;$grid.AutoGenerateColumns=$false;$grid.SelectionMode='FullRowSelect';$grid.MultiSelect=$false
     foreach($x in @(@('状态','Enabled',65),@('监控目录','Path',520),@('天数','Days',65),@('删除模式','DeleteMode',110))){$col=New-Object Windows.Forms.DataGridViewTextBoxColumn;$col.HeaderText=$x[0];$col.Name=$x[1];$col.Width=$x[2];$grid.Columns.Add($col)|Out-Null}
-    $top=New-Object Windows.Forms.FlowLayoutPanel;$top.Dock='Top';$top.Height=78;$top.Padding=[Windows.Forms.Padding]::new(5);$top.FlowDirection='LeftToRight';$top.WrapContents=$true;$top.AutoScroll=$false;$bottom=New-Object Windows.Forms.StatusStrip;$status=New-Object Windows.Forms.ToolStripStatusLabel;$status.Text='就绪';[void]$bottom.Items.Add($status);$form.Controls.Add($grid);$form.Controls.Add($top);$form.Controls.Add($bottom)
+    $form.ShowInTaskbar=$true;$top=New-Object Windows.Forms.FlowLayoutPanel;$top.Dock='Top';$top.AutoSize=$true;$top.AutoSizeMode='GrowAndShrink';$top.Padding=[Windows.Forms.Padding]::new(5);$top.FlowDirection='LeftToRight';$top.WrapContents=$true;$top.AutoScroll=$false;$bottom=New-Object Windows.Forms.StatusStrip;$status=New-Object Windows.Forms.ToolStripStatusLabel;$status.Text='就绪';[void]$bottom.Items.Add($status);$form.Controls.Add($grid);$form.Controls.Add($top);$form.Controls.Add($bottom)
     $cfg=Load-Config
     function Refresh-Grid {$grid.Rows.Clear();foreach($m in @($cfg.Monitors)){$i=$grid.Rows.Add();$grid.Rows[$i].Cells['Enabled'].Value=if($m.Enabled){'启用'}else{'停用'};$grid.Rows[$i].Cells['Path'].Value=$m.Path;$grid.Rows[$i].Cells['Days'].Value=$m.Days;$grid.Rows[$i].Cells['DeleteMode'].Value=$m.DeleteMode;$grid.Rows[$i].Tag=$m};$status.Text="已配置 $(@($cfg.Monitors).Count) 个监控目录"}
     function Add-UiButton([string]$Text,[string]$Tag){$b=New-Object Windows.Forms.Button;$b.Text=$Text;$b.Tag=$Tag;$b.Width=105;$top.Controls.Add($b)|Out-Null;return $b}
     $add=Add-UiButton '添加目录' Add;$edit=Add-UiButton '编辑' Edit;$toggle=Add-UiButton '启用/停用' Toggle;$remove=Add-UiButton '删除监控' Remove;$scan=Add-UiButton '立即扫描' Scan;$review=Add-UiButton '到期清单' Review;$log=Add-UiButton '查看日志' Log;$install=Add-UiButton '安装定时任务' Install;$uninstall=Add-UiButton '卸载定时任务' Uninstall;$exit=Add-UiButton '退出' Exit
-    $add.Add_Click({$m=Show-MonitorDialog $null;if($m){$cfg.Monitors=@($cfg.Monitors)+$m;Save-JsonAtomic $cfg $ConfigPath;Refresh-Grid}});$edit.Add_Click({if($grid.SelectedRows.Count){$m=Show-MonitorDialog $grid.SelectedRows[0].Tag;if($m){$old=$grid.SelectedRows[0].Tag;$idx=[array]::IndexOf(@($cfg.Monitors),$old);$cfg.Monitors[$idx]=$m;Save-JsonAtomic $cfg $ConfigPath;Refresh-Grid}}});$toggle.Add_Click({if($grid.SelectedRows.Count){$m=$grid.SelectedRows[0].Tag;$m.Enabled=-not [bool]$m.Enabled;Save-JsonAtomic $cfg $ConfigPath;Refresh-Grid}});$remove.Add_Click({if($grid.SelectedRows.Count){$m=$grid.SelectedRows[0].Tag;if([Windows.Forms.MessageBox]::Show("仅删除监控设置，不删除目录内容：`n$($m.Path)",'FolderNest',[Windows.Forms.MessageBoxButtons]::YesNo)-eq [Windows.Forms.DialogResult]::Yes){$cfg.Monitors=@($cfg.Monitors|Where-Object Id -ne $m.Id);$s=Load-State;$s.Units=@($s.Units|Where-Object MonitorId -ne $m.Id);Save-JsonAtomic $cfg $ConfigPath;Save-JsonAtomic $s $StatePath;Refresh-Grid}}});$scan.Add_Click({$n=Scan-All $false;$status.Text="扫描完成，待处理 $n 项"});$review.Add_Click({Show-ReviewWindow;Refresh-Grid});$log.Add_Click({if(Test-Path -LiteralPath $LogPath){Start-Process notepad.exe -ArgumentList "`"$LogPath`""}});$install.Add_Click({Install-Tasks;$status.Text='已安装任务'});$uninstall.Add_Click({Uninstall-Tasks;$status.Text='已卸载任务'});$exit.Add_Click({$form.Close()});Refresh-Grid;$form.ShowDialog()|Out-Null
+    $add.Add_Click({$m=Show-MonitorDialog $null;if($m){$cfg.Monitors=@($cfg.Monitors)+$m;Save-JsonAtomic $cfg $ConfigPath;Refresh-Grid}});$edit.Add_Click({if($grid.SelectedRows.Count){$m=Show-MonitorDialog $grid.SelectedRows[0].Tag;if($m){$old=$grid.SelectedRows[0].Tag;$idx=[array]::IndexOf(@($cfg.Monitors),$old);$cfg.Monitors[$idx]=$m;Save-JsonAtomic $cfg $ConfigPath;Refresh-Grid}}});$toggle.Add_Click({if($grid.SelectedRows.Count){$m=$grid.SelectedRows[0].Tag;$m.Enabled=-not [bool]$m.Enabled;Save-JsonAtomic $cfg $ConfigPath;Refresh-Grid}});$remove.Add_Click({if($grid.SelectedRows.Count){$m=$grid.SelectedRows[0].Tag;if([Windows.Forms.MessageBox]::Show("仅删除监控设置，不删除目录内容：`n$($m.Path)",'FolderNest',[Windows.Forms.MessageBoxButtons]::YesNo)-eq [Windows.Forms.DialogResult]::Yes){$cfg.Monitors=@($cfg.Monitors|Where-Object Id -ne $m.Id);$s=Load-State;$s.Units=@($s.Units|Where-Object MonitorId -ne $m.Id);Save-JsonAtomic $cfg $ConfigPath;Save-JsonAtomic $s $StatePath;Refresh-Grid}}});$scan.Add_Click({$n=Scan-All $false;$status.Text="扫描完成，待处理 $n 项"});$review.Add_Click({Show-ReviewWindow;Refresh-Grid});$log.Add_Click({if(Test-Path -LiteralPath $LogPath){Start-Process notepad.exe -ArgumentList "`"$LogPath`""}});$install.Add_Click({$ok=Install-Tasks;if($ok){$status.Text='已安装任务'}else{$status.Text='未安装任务'}});$uninstall.Add_Click({Uninstall-Tasks;$status.Text='已卸载定时任务'});$exit.Add_Click({$form.Close()});Refresh-Grid;$form.ShowDialog()|Out-Null
 }
-function Install-Tasks {$tr="powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" -Run";schtasks.exe /Create /TN "$AppName Daily" /TR $tr /SC DAILY /ST 02:00 /F|Out-Null;schtasks.exe /Create /TN "$AppName Logon" /TR $tr /SC ONLOGON /F|Out-Null;Log '已安装任务计划'}
+function Show-TaskInstallDialog($Monitors) {
+    $f=New-Object Windows.Forms.Form;$f.Text='选择定时任务监控目录';$f.Width=620;$f.Height=360;$f.StartPosition='CenterParent'
+    $layout=New-Object Windows.Forms.TableLayoutPanel;$layout.Dock='Fill';$layout.Padding=[Windows.Forms.Padding]::new(10);$layout.RowCount=3;$layout.ColumnCount=1;$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute,32)))|Out-Null;$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Percent,100)))|Out-Null;$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle([Windows.Forms.SizeType]::Absolute,42)))|Out-Null;$f.Controls.Add($layout)
+    $label=New-Object Windows.Forms.Label;$label.Text='勾选需要由每日 02:00 / 登录任务自动扫描的目录：';$label.AutoSize=$true;$layout.Controls.Add($label,0,0)
+    $list=New-Object Windows.Forms.CheckedListBox;$list.Dock='Fill';$list.CheckOnClick=$true;foreach($m in $Monitors){$idx=$list.Items.Add("$($m.Path)（$($m.Days) 天，$($m.DeleteMode)）");$list.SetItemChecked($idx,($m.Scheduled -ne $false))};$layout.Controls.Add($list,0,1)
+    $buttons=New-Object Windows.Forms.FlowLayoutPanel;$buttons.Dock='Fill';$buttons.FlowDirection='RightToLeft';$ok=New-Object Windows.Forms.Button;$ok.Text='安装';$cancel=New-Object Windows.Forms.Button;$cancel.Text='取消';$buttons.Controls.Add($ok);$buttons.Controls.Add($cancel);$layout.Controls.Add($buttons,0,2);$selected=[pscustomobject]@{Ids=@();Accepted=$false}
+    $ok.Add_Click({$selected.Ids=@(for($i=0;$i -lt $list.Items.Count;$i++){if($list.GetItemChecked($i)){$Monitors[$i].Id}});$selected.Accepted=$true;$f.Close()});$cancel.Add_Click({$f.Close()});$f.ShowDialog()|Out-Null;return $selected
+}
+function Install-Tasks {
+    $cfg=Load-Config;$monitors=@($cfg.Monitors|Where-Object Enabled)
+    if($monitors.Count -eq 0){Log '未安装定时任务：没有启用的监控目录';[Windows.Forms.MessageBox]::Show('没有可安装的监控目录。请先添加并启用目录。','FolderNest')|Out-Null;return $false}
+    $choice=Show-TaskInstallDialog $monitors;if(-not $choice.Accepted){Log '取消安装定时任务';return $false}
+    if($choice.Ids.Count -eq 0){Log '未安装定时任务：没有选择监控目录';[Windows.Forms.MessageBox]::Show('未选择任何监控目录，未安装定时任务。','FolderNest')|Out-Null;return $false}
+    foreach($m in $monitors){$m.Scheduled=($choice.Ids -contains $m.Id)};Save-JsonAtomic $cfg $ConfigPath
+    $tr="powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" -Run"
+    $okDaily=$false;$okLogon=$false;& schtasks.exe /Create /TN "$AppName Daily" /TR $tr /SC DAILY /ST 02:00 /F|Out-Null;if($LASTEXITCODE -eq 0){$okDaily=$true};& schtasks.exe /Create /TN "$AppName Logon" /TR $tr /SC ONLOGON /F|Out-Null;if($LASTEXITCODE -eq 0){$okLogon=$true}
+    $names=($monitors|Where-Object Scheduled|ForEach-Object Path)-join '; ';Log "安装定时任务：目录 [$names]；每日02:00=$okDaily；登录补扫=$okLogon"
+    if($okDaily -and $okLogon){return $true};[Windows.Forms.MessageBox]::Show('定时任务安装失败，请查看日志。','FolderNest')|Out-Null;return $false
+}
 function Uninstall-Tasks {
     foreach($taskName in @("$AppName Daily", "$AppName Logon")){
         # schtasks returns an error when a task does not exist. Check first so
@@ -116,4 +147,4 @@ function Uninstall-Tasks {
     Log '已卸载任务计划'
 }
 
-if($Install){Install-Tasks;exit};if($Uninstall){Uninstall-Tasks;exit};if($Run){[void](Scan-All $true);exit};if($Review){Show-ReviewWindow;exit};if($Settings){Show-MainWindow;exit};Show-MainWindow
+if($Install){[void](Install-Tasks);exit};if($Uninstall){Uninstall-Tasks;exit};if($Run){[void](Scan-All $true $true);exit};if($Review){Show-ReviewWindow;exit};if($Settings){Show-MainWindow;exit};Show-MainWindow

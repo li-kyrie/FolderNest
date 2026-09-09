@@ -1,3 +1,2 @@
 @echo off
-setlocal
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0FolderNest.ps1" %*
+wscript.exe //nologo "%~dp0FolderNest.vbs" %*
