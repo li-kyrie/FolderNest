@@ -1,8 +1,35 @@
 # FolderNest
 
-FolderNest 是一个 Windows 本地文件夹保管期限管理工具。它将每个监控目录的根目录文件和一级子文件夹作为清理单元，按规则积累到期清单，在用户确认后移入回收站或永久删除。
+FolderNest 是一个 Windows 本地文件保留期限管理工具：从首次观察到文件进入目录开始计时，达到设定天数后在用户在线时提醒，由用户勾选确认后移入回收站或永久删除。
 
-## 当前版本：v1.1.0
+## 重构框架：1.2.0-preview.1
+
+2026-10-10 根据完整对话统一需求，建立 **C# / .NET 10 LTS + WPF + SQLite** 框架。所有工作位于 `D:\FolderNest`。历史 PowerShell 原型保留，新框架使用单独的原生 GUI EXE。
+
+- [统一需求规格](docs/REQUIREMENTS.md)：全部需求、修正及明确的实现约定。
+- [架构与数据设计](docs/ARCHITECTURE.md)：模块职责、存储、计时、调度和便携路径。
+- [分阶段实施计划](docs/PLAN.md)：本轮框架、后续监听、任务提醒、清单删除、发布验收。
+- [验证记录](docs/VALIDATION.md)：本轮实际验证范围与未覆盖项。
+
+本轮可运行：添加目录、验证后直接编辑、天数微调、Ctrl/Shift 多选、空白区域框选、批量启停/移除监控、全量/选中手动扫描、SQLite 保存、到期清单预览、旧 Windows 任务状态查询与轮换日志。
+
+**本轮尚未接入：在线进入事件监听、自动任务部署、Toast/托盘、勾选清单的实际文件删除、旧配置导入和完整设置页。** 当前预览不会自动替换旧版，也不会操作监控文件的删除。
+
+框架预览：`D:\FolderNest\artifacts\portable\FolderNest.exe`。
+便携包：`D:\FolderNest-Framework-Preview-win-x64.zip`，解压后直接双击 `FolderNest.exe`。程序为自包含 Windows x64 GUI，不需要 PowerShell 或另装 .NET 运行时；框架数据位于 EXE 旁 `data-v2/`。原 `data/` 和旧 `FolderNest.cmd` 保留。
+
+```powershell
+Set-Location D:\FolderNest
+./scripts/build.ps1 -Publish
+```
+
+构建需要 .NET 10 SDK，本工作目录的官方便携 SDK 位于 `.tools/dotnet/`，不提交 Git。构建脚本先编译并运行行为回归，再生成便携 EXE/ZIP。
+
+关机期间不能实际扫描。已记录文件的到期日仍按时间推进，开机补算；未运行期间进入的文件从首次发现保守计时。到期清单实时从元数据派生，不额外保存永久待处理队列。
+
+## 历史原型：v1.1.0
+
+以下是旧 PowerShell 版的使用说明。历史实现的行为和不足已在需求文档中核对，不应将下面的功能说明当作新框架已完成全部功能的证明。`v1.0.0` / `v1.1.0` 标签保持原提交。
 
 这是无需安装 .NET 的 PowerShell 5.1 便携版，全部日常操作都通过图形界面完成：
 

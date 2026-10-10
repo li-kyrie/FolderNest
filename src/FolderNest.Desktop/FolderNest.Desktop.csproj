@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>FolderNest</AssemblyName>
+    <ApplicationIcon>../../FolderNest.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FolderNest.Infrastructure/FolderNest.Infrastructure.csproj" />
+    <Resource Include="../../FolderNest.ico" Link="Assets/FolderNest.ico" />
+  </ItemGroup>
+</Project>

@@ -6,3 +6,10 @@ obj/
 state.json
 config.json
 data/
+data-v2/
+.tools/
+artifacts/
+TestResults/
+*.db
+*.db-shm
+*.db-wal

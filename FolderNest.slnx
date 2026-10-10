@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FolderNest.Core/FolderNest.Core.csproj" />
+    <Project Path="src/FolderNest.Infrastructure/FolderNest.Infrastructure.csproj" />
+    <Project Path="src/FolderNest.Desktop/FolderNest.Desktop.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FolderNest.Tests/FolderNest.Tests.csproj" />
+  </Folder>
+</Solution>
