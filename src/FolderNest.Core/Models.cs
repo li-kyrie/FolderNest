@@ -14,7 +14,7 @@ public sealed record DueItem(MonitorDefinition Monitor, Observation Observation,
 public sealed record ScanResult(int MonitorsScanned, IReadOnlyList<DueItem> DueItems, IReadOnlyList<string> Errors);
 public sealed record ScheduleSettings(TimeOnly DailyTime, string TimeZoneId);
 public sealed record TaskStatus(TaskDeployment Deployment, string Details);
-public sealed record CleanupRequest(IReadOnlyList<DueItem> SelectedItems, DeletionMode Mode);
+public sealed record CleanupRequest(IReadOnlyList<DueItem> SelectedItems, DeletionMode? Mode = null);
 public sealed record CleanupResult(string Path, bool Success, string? Error);
 
 public interface IClock { DateTimeOffset UtcNow { get; } }
@@ -36,14 +36,20 @@ public interface ITaskScheduler
     TaskStatus Deploy(ScheduleSettings settings, string executablePath);
     TaskStatus Remove();
 }
-public interface IArrivalTracker : IDisposable
-{
-    event EventHandler<Guid>? InventoryChanged;
-    void Watch(IReadOnlyList<MonitorDefinition> monitors);
-}
-public interface INotificationService { Task NotifyAsync(int dueCount, CancellationToken cancellationToken); }
 public interface ICleanupService
 {
     // Only the review window may construct this explicit request; no timer calls cleanup.
     Task<IReadOnlyList<CleanupResult>> ExecuteAsync(CleanupRequest request, CancellationToken cancellationToken);
+}
+public interface IFileDeletion { void Delete(string path, bool isDirectory, DeletionMode mode); }
+public sealed record AppSettings(string DailyTime = "02:00", int LogLimitMiB = 10,
+    DeletionMode DefaultDeletionMode = DeletionMode.RecycleBin)
+{
+    public ScheduleSettings Schedule => new(TimeOnly.ParseExact(DailyTime, "HH:mm"), TimeZoneInfo.Local.Id);
+    public void Validate()
+    {
+        if (!TimeOnly.TryParseExact(DailyTime, "HH:mm", out _)) throw new ArgumentException("时间必须为 24 小时制 HH:mm，例如 02:00 或 14:00。");
+        if (LogLimitMiB is < 2 or > 1024) throw new ArgumentException("日志总限额必须为 2–1024 MiB 的整数。");
+        if (!Enum.IsDefined(DefaultDeletionMode)) throw new ArgumentException("删除模式无效。");
+    }
 }

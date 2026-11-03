@@ -5,7 +5,7 @@
  x:Name="Root">
   <Grid>
     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="22"/></Grid.ColumnDefinitions>
-    <TextBox VerticalContentAlignment="Center" PreviewKeyDown="OnKeyDown">
+    <TextBox x:Name="Editor" VerticalContentAlignment="Center" PreviewKeyDown="OnKeyDown" AutomationProperties.Name="保留天数">
       <TextBox.Text>
         <Binding Path="Value" ElementName="Root" UpdateSourceTrigger="LostFocus" ValidatesOnExceptions="True" NotifyOnValidationError="True">
           <Binding.ValidationRules><local:IntegerDaysRule/></Binding.ValidationRules>
@@ -14,8 +14,8 @@
     </TextBox>
     <Grid Grid.Column="1">
       <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-      <Button Content="▴" Padding="0" Margin="0" Click="Increase" Focusable="False"/>
-      <Button Grid.Row="1" Content="▾" Padding="0" Margin="0" Click="Decrease" Focusable="False"/>
+      <Button Content="▴" Padding="0" Margin="0" Click="Increase" Focusable="False" AutomationProperties.Name="天数增加 1"/>
+      <Button Grid.Row="1" Content="▾" Padding="0" Margin="0" Click="Decrease" Focusable="False" AutomationProperties.Name="天数减少 1"/>
     </Grid>
   </Grid>
 </UserControl>

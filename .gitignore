@@ -10,6 +10,7 @@ data-v2/
 .tools/
 artifacts/
 TestResults/
+/FolderNest.exe
 *.db
 *.db-shm
 *.db-wal

@@ -8,6 +8,7 @@ public sealed class ScanService(IMonitorRepository repository, IFileInventory in
             throw new ArgumentException("请先选择要扫描的目录。", nameof(selected));
         var errors = new List<string>();
         var count = 0;
+        var available = new HashSet<Guid>();
         foreach (var monitor in repository.GetMonitors().Where(m => m.Enabled && (scope switch
         {
             ScanScope.Scheduled => m.Scheduled,
@@ -25,6 +26,7 @@ public sealed class ScanService(IMonitorRepository repository, IFileInventory in
                     ExpiryPolicy.Observe(monitor.Id, u, previous.GetValueOrDefault(u.Path), now)).ToArray();
                 repository.ReplaceObservations(monitor.Id, observations);
                 count++;
+                available.Add(monitor.Id);
                 log.Write("scan", $"{monitor.Path}：{observations.Length} 个清理单元");
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -33,12 +35,12 @@ public sealed class ScanService(IMonitorRepository repository, IFileInventory in
                 log.Write("scan-failed", errors[^1]);
             }
         }
-        var due = GetDue().Where(i => scope switch
+        var due = GetDue().Where(i => available.Contains(i.Monitor.Id) && (scope switch
         {
             ScanScope.Scheduled => i.Monitor.Scheduled,
             ScanScope.Selected => selected!.Contains(i.Monitor.Id),
             _ => true
-        }).ToArray();
+        })).ToArray();
         return new(count, due, errors);
     }
 

@@ -17,7 +17,12 @@ public partial class DayStepper : UserControl
         typeof(DayStepper),new FrameworkPropertyMetadata(30,FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
     public int Value { get => (int)GetValue(ValueProperty); set => SetValue(ValueProperty,value); }
     public DayStepper() => InitializeComponent();
-    private void Step(int delta) => SetCurrentValue(ValueProperty,Math.Clamp(Value+delta,1,36500));
+    private void Step(int delta)
+    {
+        Editor.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        if(Validation.GetHasError(Editor))return;
+        SetCurrentValue(ValueProperty,Math.Clamp(Value+delta,1,36500));
+    }
     private void Increase(object sender,RoutedEventArgs e) => Step(1);
     private void Decrease(object sender,RoutedEventArgs e) => Step(-1);
     private void OnKeyDown(object sender,KeyEventArgs e)

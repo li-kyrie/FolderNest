@@ -10,8 +10,7 @@ public static class MonitorValidation
         if (!Directory.Exists(full)) throw new ArgumentException("路径无效：文件夹不存在或当前不可访问。");
         if (string.Equals(full, System.IO.Path.GetPathRoot(full), StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("请选择具体文件夹，不能监控整个磁盘。");
-        if ((File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
-            throw new ArgumentException("请直接添加真实文件夹，不要添加符号链接或目录联接。");
+        RejectLinkedAncestors(full);
         return full;
     }
 
@@ -29,4 +28,11 @@ public static class MonitorValidation
         string.Equals(path, parent, StringComparison.OrdinalIgnoreCase) ||
         path.StartsWith(System.IO.Path.TrimEndingDirectorySeparator(parent) + System.IO.Path.DirectorySeparatorChar,
             StringComparison.OrdinalIgnoreCase);
+
+    public static void RejectLinkedAncestors(string path)
+    {
+        for(var directory=new DirectoryInfo(path);directory is not null;directory=directory.Parent)
+            if((directory.Attributes & FileAttributes.ReparsePoint)!=0)
+                throw new IOException("路径包含符号链接或目录联接，请直接选择真实目录。");
+    }
 }

@@ -3,6 +3,8 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>FolderNest</AssemblyName>
     <ApplicationIcon>../../FolderNest.ico</ApplicationIcon>
   </PropertyGroup>

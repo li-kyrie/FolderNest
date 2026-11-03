@@ -17,6 +17,7 @@ public sealed class SqliteRepository : IMonitorRepository
         command.CommandText = """
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS monitors(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS observations(
               monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
               path TEXT NOT NULL COLLATE NOCASE, payload TEXT NOT NULL,
@@ -27,6 +28,19 @@ public sealed class SqliteRepository : IMonitorRepository
     }
 
     private SqliteConnection Open() { var c = new SqliteConnection(connectionString); c.Open(); return c; }
+    public string? ReadValue(string key)
+    {
+        using var c = Open(); using var cmd = c.CreateCommand(); cmd.CommandText="SELECT value FROM settings WHERE key=$key";
+        cmd.Parameters.AddWithValue("$key",key); return cmd.ExecuteScalar() as string;
+    }
+    public void WriteValue(string key, string value)
+    {
+        using var c = Open(); using var cmd = c.CreateCommand();
+        cmd.CommandText="INSERT INTO settings(key,value) VALUES($key,$value) ON CONFLICT(key) DO UPDATE SET value=excluded.value";
+        cmd.Parameters.AddWithValue("$key",key);cmd.Parameters.AddWithValue("$value",value);cmd.ExecuteNonQuery();
+    }
+    public AppSettings ReadSettings() => ReadValue("app") is { } json ? JsonSerializer.Deserialize<AppSettings>(json)! : new();
+    public void WriteSettings(AppSettings settings) { settings.Validate(); WriteValue("app",JsonSerializer.Serialize(settings)); }
     public IReadOnlyList<MonitorDefinition> GetMonitors()
     {
         using var c = Open(); using var cmd = c.CreateCommand();
@@ -60,6 +74,20 @@ public sealed class SqliteRepository : IMonitorRepository
     {
         using var c = Open(); using var cmd = c.CreateCommand(); cmd.CommandText = "DELETE FROM monitors WHERE id=$id";
         cmd.Parameters.AddWithValue("$id", id.ToString()); cmd.ExecuteNonQuery();
+    }
+
+    public void SetScheduled(IReadOnlySet<Guid> selected)
+    {
+        var monitors=GetMonitors();
+        using var c=Open();using var tx=c.BeginTransaction();
+        foreach(var m in monitors)
+        {
+            using var cmd=c.CreateCommand();cmd.Transaction=tx;
+            cmd.CommandText="UPDATE monitors SET payload=$payload WHERE id=$id";
+            cmd.Parameters.AddWithValue("$id",m.Id.ToString());
+            cmd.Parameters.AddWithValue("$payload",JsonSerializer.Serialize(m with {Scheduled=m.Enabled && selected.Contains(m.Id)}));cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
     }
 
     public IReadOnlyList<Observation> GetObservations(Guid monitorId)

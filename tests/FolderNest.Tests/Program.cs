@@ -108,9 +108,134 @@ try
         Assert(Rejected(new(Guid.NewGuid(),folderA,0),[]),"zero accepted");
         Assert(Rejected(new(Guid.NewGuid(),nested),[new(Guid.NewGuid(),folderA)]),"overlap accepted");
     });
+    Test("Unavailable expired folder is excluded from notification results",()=>
+    {
+        var missing=Path.Combine(temp,"missing");var m=new MonitorDefinition(Guid.NewGuid(),missing,1,Scheduled:true);
+        repo.SaveMonitor(m);repo.ReplaceObservations(m.Id,[new(m.Id,Path.Combine(missing,"x"),false,1,"x",now.AddDays(-5),now.AddDays(-5))]);
+        var result=new ScanService(repo,new LocalFileInventory(),new FakeClock(now),new NoLog()).Scan(ScanScope.Scheduled);
+        Assert(result.DueItems.Count==0 && result.Errors.Count==1,"unavailable folder notified");repo.RemoveMonitor(m.Id);
+    });
+    Test("App settings persist, reject invalid time and log limits",()=>
+    {
+        repo.WriteSettings(new("14:35",4,DeletionMode.Permanent));Assert(repo.ReadSettings()==new AppSettings("14:35",4,DeletionMode.Permanent),"settings roundtrip failed");
+        foreach(var invalid in new[]{new AppSettings("2:00"),new AppSettings("25:00"),new AppSettings(LogLimitMiB:1)})
+        {var rejected=false;try{repo.WriteSettings(invalid);}catch(ArgumentException){rejected=true;}Assert(rejected,"bad settings accepted");}
+    });
+    Test("Cleanup requires reviewed expiry, unchanged config and unchanged fingerprint",()=>
+    {
+        var root=Directory.CreateDirectory(Path.Combine(temp,"cleanup")).FullName;
+        var file=Path.Combine(root,"old.txt");File.WriteAllText(file,"content");var inventory=new LocalFileInventory();
+        var m=new MonitorDefinition(Guid.NewGuid(),root,1);repo.SaveMonitor(m);
+        var observation=ExpiryPolicy.Observe(m.Id,inventory.Enumerate(root).Single(),null,now.AddDays(-2));repo.ReplaceObservations(m.Id,[observation]);
+        var item=new DueItem(m,observation,ExpiryPolicy.DueAt(observation,1));var deletion=new FakeDeletion();
+        var service=new CleanupService(repo,inventory,deletion,new FakeClock(now),new NoLog());
+        IReadOnlyList<CleanupResult> Run(CleanupRequest r)=>service.ExecuteAsync(r,CancellationToken.None).GetAwaiter().GetResult();
+        repo.SaveMonitor(m with{Enabled=false});Assert(!Run(new([item]))[0].Success,"disabled cleaned");
+        repo.SaveMonitor(m with{RetentionDays=30});Assert(!Run(new([item]))[0].Success,"not due cleaned");
+        repo.SaveMonitor(m with{DeletionMode=DeletionMode.Permanent});Assert(!Run(new([item]))[0].Success,"mode changed without reconfirm");
+        repo.SaveMonitor(m);File.AppendAllText(file,"updated");Assert(!Run(new([item]))[0].Success,"changed file cleaned");
+        Assert(deletion.Calls.Count==0 && repo.GetObservations(m.Id).Count==1,"rejected operation touched content/history");
+        var fresh=ExpiryPolicy.Observe(m.Id,inventory.Enumerate(root).Single(),null,now.AddDays(-2));repo.ReplaceObservations(m.Id,[fresh]);
+        Assert(Run(new([new(m,fresh,ExpiryPolicy.DueAt(fresh,1))]))[0].Success,"valid cleanup failed");
+        Assert(deletion.Calls.Single().Mode==DeletionMode.RecycleBin && repo.GetObservations(m.Id).Count==0,"default mode/history wrong");
+        repo.ReplaceObservations(m.Id,[fresh]);Assert(Run(new([new(m,fresh,ExpiryPolicy.DueAt(fresh,1))],DeletionMode.Permanent))[0].Success,"override failed");
+        Assert(deletion.Calls.Last().Mode==DeletionMode.Permanent,"override not honored");
+        Assert(Run(new([])).Count==0,"empty selection had side effects");repo.RemoveMonitor(m.Id);
+    });
+    Test("Failed deletion retains observations; forged outside target is rejected",()=>
+    {
+        var m=new MonitorDefinition(Guid.NewGuid(),folderA,1);repo.SaveMonitor(m);
+        var unit=new LocalFileInventory().Enumerate(folderA).First();var o=ExpiryPolicy.Observe(m.Id,unit,null,now.AddDays(-2));repo.ReplaceObservations(m.Id,[o]);
+        var service=new CleanupService(repo,new LocalFileInventory(),new FailingDeletion(),new FakeClock(now),new NoLog());
+        var results=service.ExecuteAsync(new([new(m,o,now)]),CancellationToken.None).Result;
+        Assert(!results[0].Success && repo.GetObservations(m.Id).Count==1,"failed cleanup lost history");
+        var forged=o with{Path=Path.Combine(temp,"outside")};repo.ReplaceObservations(m.Id,[forged]);
+        Assert(!service.ExecuteAsync(new([new(m,forged,now)]),CancellationToken.None).Result[0].Success,"outside allowed");repo.RemoveMonitor(m.Id);
+    });
+    Test("Real Windows recycle and permanent deletion affect only test files",()=>
+    {
+        var deletion=new WindowsFileDeletion();
+        var file=Path.Combine(temp,"recycle-test-"+Guid.NewGuid()+".txt");File.WriteAllText(file,"FolderNest disposable test");
+        deletion.Delete(file,false,DeletionMode.RecycleBin);Assert(!File.Exists(file),"recycle did not complete");
+        var dir=Directory.CreateDirectory(Path.Combine(temp,"permanent-test")).FullName;File.WriteAllText(Path.Combine(dir,"test.txt"),"test");
+        deletion.Delete(dir,true,DeletionMode.Permanent);Assert(!Directory.Exists(dir),"permanent folder did not complete");
+    });
+    Test("Recursive deletion refuses nested junction; linked ancestor path rejected",()=>
+    {
+        var root=Directory.CreateDirectory(Path.Combine(temp,"nested-link")).FullName;
+        var target=Directory.CreateDirectory(Path.Combine(temp,"keep-target")).FullName;var keep=Path.Combine(target,"keep.txt");File.WriteAllText(keep,"keep");
+        var link=Path.Combine(root,"link");
+        using var p=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe",$"/d /c mklink /J \"{link}\" \"{target}\""){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true})!;p.WaitForExit();Assert(p.ExitCode==0,"junction setup failed");
+        try
+        {
+            var rejected=false;try{new WindowsFileDeletion().Delete(root,true,DeletionMode.Permanent);}catch(IOException){rejected=true;}
+            Assert(rejected && File.Exists(keep),"followed destructive junction");
+            var sub=Directory.CreateDirectory(Path.Combine(target,"sub")).FullName;
+            rejected=false;try{MonitorValidation.NormalizePath(Path.Combine(link,"sub"));}catch(IOException){rejected=true;}
+            Assert(rejected,"linked parent accepted");
+        }
+        finally {Directory.Delete(link);}
+    });
+    Test("Arrival watcher reports nested changes without modifying outside files",()=>
+    {
+        var root=Directory.CreateDirectory(Path.Combine(temp,"watch")).FullName;var m=new MonitorDefinition(Guid.NewGuid(),root);
+        using var signal=new ManualResetEventSlim();using var watcher=new ArrivalTracker();
+        watcher.Changed+=(_,e)=>{if(e.MonitorId==m.Id && e.Path.EndsWith("new.txt"))signal.Set();};watcher.Watch([m],new NoLog());
+        File.WriteAllText(Path.Combine(root,"new.txt"),"test");Assert(signal.Wait(5000),"arrival event missing");
+    });
+    Test("Shrinking log limit enforces total size after next write",()=>
+    {
+        var path=Path.Combine(temp,"shrink","test.log");var limit=10;var log=new RollingAuditLog(path,()=>limit);
+        for(int i=0;i<1100;i++)log.Write("test",new string('x',8192));limit=2;log.Write("settings","shrink");
+        Assert(Directory.GetFiles(Path.GetDirectoryName(path)!).Sum(p=>new FileInfo(p).Length)<=2*1024*1024,"shrink exceeds cap");
+    });
+    Test("Legacy import is configuration only with fresh IDs and manual scheduling",()=>
+    {
+        var path=Path.Combine(temp,"config.json");File.WriteAllText(path,System.Text.Json.JsonSerializer.Serialize(new{Monitors=new[]{new{Path=folderA,Days=14,DeleteMode="RecycleBin",Enabled=true,Scheduled=true}}}));
+        var m=LegacyImporter.Read(path).Single();Assert(m.Path==folderA && m.RetentionDays==14 && !m.Scheduled && File.Exists(path),"legacy migration altered source or deployed");
+    });
+    if(OperatingSystem.IsWindows())Test("Real isolated Task Scheduler deployment, XML, status and removal",()=>
+    {
+        var prefix="FolderNest Test "+Guid.NewGuid().ToString("N");
+        var scheduler=new WindowsTaskScheduler(temp,new NoLog(),prefix);
+        try
+        {
+            var before=scheduler.GetStatus();Assert(before.Deployment==TaskDeployment.NotInstalled,"initial task query: "+before.Details);
+            var settings=new ScheduleSettings(new TimeOnly(23,59),TimeZoneInfo.Local.Id);
+            var deployed=scheduler.Deploy(settings,Environment.ProcessPath!);
+            Assert(deployed.Deployment==TaskDeployment.Installed,"task install query failed: "+deployed.Details);
+            dynamic com=Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service")!)!;com.Connect();dynamic root=com.GetFolder("\\");
+            var xml=(string)root.GetTask(prefix+" Daily").Xml;
+            Assert(xml.Contains("23:59:00") && xml.Contains("InteractiveToken") && xml.Contains("--background") && xml.Contains("StartWhenAvailable"),"incorrect task definition");
+            Assert(new WindowsTaskScheduler(temp,new NoLog(),prefix,()=>new TimeOnly(22,0)).GetStatus().Deployment==TaskDeployment.Partial,"external time mismatch not detected");
+            root.DeleteTask(prefix+" Logon",0);Assert(scheduler.GetStatus().Deployment==TaskDeployment.Partial,"missing task not partial");
+            Assert(scheduler.Remove().Deployment==TaskDeployment.NotInstalled,"remove left task");
+        }
+        finally{scheduler.Remove();}
+    });
+    if(args.Length==2 && args[0]=="--ui-fixture")
+    {
+        var fixture=Path.GetFullPath(args[1]);Directory.CreateDirectory(fixture);
+        var uiRepo=new SqliteRepository(Path.Combine(fixture,"data","foldernest.db"));
+        foreach(var suffix in new[]{"A","B","Empty"})
+        {
+            var root=Directory.CreateDirectory(Path.Combine(fixture,"Monitor-"+suffix)).FullName;
+            var m=new MonitorDefinition(Guid.NewGuid(),root,1);uiRepo.SaveMonitor(m);
+            if(suffix=="Empty")continue;
+            File.WriteAllText(Path.Combine(root,"test-"+suffix+".txt"),"Disposable FolderNest UI fixture");
+            var unit=new LocalFileInventory().Enumerate(root).Single();uiRepo.ReplaceObservations(m.Id,[ExpiryPolicy.Observe(m.Id,unit,null,DateTimeOffset.UtcNow.AddDays(-3))]);
+        }
+        Console.WriteLine("UI fixture: "+fixture);
+    }
     Console.WriteLine($"{passed} behavioral tests passed.");
 }
 finally { SqliteConnection.ClearAllPools();Directory.Delete(temp,true); }
 
 sealed class FakeClock(DateTimeOffset now):IClock { public DateTimeOffset UtcNow=>now; }
 sealed class NoLog:IAuditLog { public void Write(string operation,string message){} }
+sealed class FakeDeletion:IFileDeletion
+{
+    public List<(string Path,DeletionMode Mode)> Calls {get;}=[];
+    public void Delete(string path,bool directory,DeletionMode mode)=>Calls.Add((path,mode));
+}
+sealed class FailingDeletion:IFileDeletion {public void Delete(string path,bool directory,DeletionMode mode)=>throw new IOException("Test locked file");}

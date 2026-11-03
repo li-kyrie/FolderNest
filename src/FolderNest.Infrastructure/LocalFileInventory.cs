@@ -11,6 +11,7 @@ public sealed class LocalFileInventory : IFileInventory
     {
         var directory = new DirectoryInfo(root);
         if (!directory.Exists) throw new DirectoryNotFoundException("监控目录暂时不可访问。");
+        MonitorValidation.RejectLinkedAncestors(root);
         if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
             throw new IOException("监控根目录变成了链接，请重新选择真实目录。");
         var units = new List<FileUnit>();
@@ -31,10 +32,10 @@ public sealed class LocalFileInventory : IFileInventory
 
     private static bool IsLink(FileSystemInfo info) => (info.Attributes & FileAttributes.ReparsePoint) != 0;
     private static string FileToken(FileInfo file, string relative) =>
-        $"F\0{relative}\0{file.Length.ToString(CultureInfo.InvariantCulture)}\0{file.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture)}";
+        $"F\0{relative}\0{file.Length.ToString(CultureInfo.InvariantCulture)}\0{file.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture)}\0{file.CreationTimeUtc.Ticks}";
     private static void Collect(DirectoryInfo folder, string root, List<string> tokens, ref long size)
     {
-        tokens.Add("D\0" + Path.GetRelativePath(root, folder.FullName));
+        tokens.Add("D\0" + Path.GetRelativePath(root, folder.FullName) + "\0" + folder.CreationTimeUtc.Ticks);
         foreach (var entry in folder.EnumerateFileSystemInfos())
         {
             if (IsLink(entry)) continue;

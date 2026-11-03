@@ -1,64 +1,53 @@
-# FolderNest 框架设计
+# FolderNest 2.0 架构
 
-## 选型
+2026-11-03。唯一运行框架为 C# / .NET 10 + WPF；SQLite 保存状态，WinForms 仅提供系统 NotifyIcon，Microsoft.VisualBasic.FileIO 提供 Windows Shell 删除适配。它们都是同一 EXE 内的 .NET 系统库，不再加载旧 PowerShell。
 
-正式路线：C# / .NET 10 LTS、WPF、SQLite、Windows Task Scheduler、Windows Shell 回收站、Toast/托盘。以 Windows 10 22H2 / Windows 11 x64 为首个交付平台，最终采用自包含便携 EXE。旧 PowerShell 5.1 + WinForms 留作历史原型，不继续往单脚本堆叠功能。
+## 分层与职责
 
-WPF 有成熟的原生任务栏、DataGrid 编辑/验证/选择机制，适合 Windows 专用小程序；WinUI 3 的发布与系统集成成本较高；Electron 对本地小工具体积较大；Tauri 引入 WebView/Rust 混合栈，目前没有跨平台要求。使用原生 WPF 和轻量 MVVM，不先引入庞大的 UI 框架。
+| 层 | 主要文件 | 职责 |
+| --- | --- | --- |
+| Core | Models、MonitorValidation | 类型、接口、目录/天数约束 |
+| Core | ExpiryPolicy、ReminderPolicy | 首次观察和活动时间锚点、到期判断、当地每日提醒策略 |
+| Core | ScanService | 完整枚举成功后替换本目录记录；失败保留历史、不放入本轮到期清单 |
+| Core | CleanupService | 只接受明确清单请求；删除前检查配置、记录、归属、指纹和期限，逐项审计 |
+| Infrastructure | SqliteRepository | 参数化 SQLite，WAL，原子替换观察记录，设置保存，目录删除级联元数据 |
+| Infrastructure | LocalFileInventory | 根文件/一级子文件夹清理单元、递归元数据指纹、不遍历重解析点 |
+| Infrastructure | ArrivalTracker | FileSystemWatcher，子目录事件、重命名、溢出重同步 |
+| Infrastructure | WindowsTaskScheduler | COM 计划任务部署/回滚/卸载和实际状态核对 |
+| Infrastructure | WindowsFileDeletion | 删除前拒绝链接祖先及后代，再调用系统回收站/永久删除 |
+| Infrastructure | PortablePaths、RollingAuditLog、LegacyImporter | 可写路径探测、总额受限日志、只读旧配置转换 |
+| Desktop | App | GUI WinExe、图标、数据目录单实例、物理锁、托盘和计时器 |
+| Desktop | MainViewModel、MonitorRow | UI 状态、串行操作、INotifyDataErrorInfo、只保存合法配置 |
+| Desktop | MainWindow、Dialogs、Controls | 目录管理、任务勾选、设置、到期清单、整数微调和选择交互 |
 
-参考产品入口（对话中已有调研方向，不代表本轮重新核验其实现框架）：[DropIt](https://www.dropitproject.com/)、[File Juggler](https://www.filejuggler.com/)、[BleachBit](https://www.bleachbit.org/)。借鉴目录规则、预览和结果日志；“进入时间＋在线确认”按 FolderNest 自身规则实现。
+## 运行流
 
-## 模块边界
+1. App 解析可选的 `--data`，定位真实数据目录。命名互斥量防重复进程，物理独占文件锁阻止别名路径并发打开相同库。再次正常启动发送显示事件；任务启动发送检查信号。
+2. 正常启动显示主窗口；`--background` 仅启动托盘。任务以当前用户交互令牌运行，不要求服务、不保存密码。
+3. WPF Dispatcher 每 3 秒检查状态。自动任务完整部署时，仅处理 Scheduled + Enabled 的目录；启动/每日到点/错过计划后补扫，每 15 分钟全量校正，事件发生约 2 秒后合并校正。
+4. 观察事件先刷新对应一级清理单元的 LastActivity，再枚举与提交。队列上限约 10000，溢出或 watcher 错误时保守刷新计时并重扫，宁可推迟而不提前删除。
+5. 自动检查与手动扫描/清理共用 SemaphoreSlim，操作期间 GUI 配置入口不可用。配置和任务选择从 UI Dispatcher 提交，避免扫描中切换目录。
+6. 到指定时间且当天尚未提醒且存在本次成功扫描的到期项时发通知；持久化最近提醒日期，不保存 Pending 清单。无人操作不启动删除。
+7. 用户打开清单先重扫，点击执行并二次确认后才构造 CleanupRequest。删除前再次验证；成功后才移除对应记录，失败留记录并显示原因。
 
-```mermaid
-flowchart TD
-    UI[WPF 桌面界面 / MVVM] --> Core[配置验证 / 计时规则 / 扫描协调]
-    Core --> Repo[SQLite 元数据]
-    Core --> Inventory[目录清单 / 链接排除]
-    Core --> Log[有限额轮换日志]
-    Schedule[Windows 定时 / 登录补偿] --> Core
-    Tracker[在线进入 / 修改事件追踪] --> Core
-    Core --> Due[实时派生到期清单]
-    Due --> Notice[仅在线且非空时提醒]
-    Due --> Review[可勾选清单]
-    Review --> Confirm[用户确认 / 目标再校验]
-    Confirm --> Delete[回收站 / 永久删除适配器]
-```
+截止时间为 max(FirstSeenUtc, LastActivityUtc) + RetentionDays。首次观察不用文件原修改时间；未运行期间的真实进入时刻不可可靠还原。文件指纹为排序后的相对路径、类型、大小、修改/创建时间 SHA-256；这是**元数据指纹**，不是文件内容哈希。
 
-计时服务不引用桌面 UI 或 Windows API；存储/目录扫描/日志是可替换适配器；清理服务没有自动调度入口。调度器和跟踪器与 GUI 共用核心服务，通过进程锁和 SQLite 事务协调，避免并发写入和重复提醒。
+## 目录与任务状态
 
-## 代码结构与本轮状态
+行内“参与/不参与”是配置选择，“实际任务状态”来自 COM 核对，不是勾选即成功。核对任务是否存在、是否启用、操作 EXE/参数、用户、触发类型与每日时间。未部署/部分部署/未知状态不会启动自动扫描或发通知。
 
-| 模块 | 本轮已落地 | 待接入 |
-|---|---|---|
-| `src/FolderNest.Core` | 类型化目录/观察记录、路径校验、到期算法、选择扫描、每日提醒决策 | 调度补偿协调、清理复验流程 |
-| `src/FolderNest.Infrastructure` | SQLite 事务存储、目录清单、重解析点排除、轮换日志、便携数据路径、旧任务状态读取 | FileSystemWatcher、任务部署/卸载、Toast、回收站、旧数据导入 |
-| `src/FolderNest.Desktop` | 原生 WinExe/图标、WPF 主窗、可校验编辑/天数按钮、Ctrl/Shift 与空白区框选、批量启停/删除监控/扫描、到期预览、任务状态区 | 原尺寸编辑窗、设置页、勾选删除清单、托盘/通知、任务选择部署 |
-| `tests/FolderNest.Tests` | 无测试框架依赖的行为回归可执行程序 | 调度/清理/GUI 自动化集成验收 |
-| `scripts/build.ps1` | 构建、行为测试、自包含发布、D 盘便携 ZIP | 发布元数据、版本流水线 |
+每用户两个全局任务，不为每目录单独创建任务。部署前至少一个启用且勾选的目录；两个任务都验证成功后原子保存目录选择。单个目录删除或取消参与不删除全局任务，但不再扫描该目录；卸载全局任务不清空配置。移动程序需重新部署。
 
-框架预览不会部署新任务，不执行文件删除，也不自动迁移旧配置。界面明确显示“新框架未部署”；可独立查询旧版任务存在状态。提供接口表示后续服务边界，不以空实现宣称功能完成。
+## 存储和发布
 
-## 数据与计时
+SQLite 的 monitors 表保存类型化 JSON 配置；observations 以 monitor_id/path 为键；settings 保存程序设置和最后提醒日期。删除监控使用外键级联清理观察数据，不触碰真实文件；改路径仅重置该 ID 的观察历史。停用保留历史但不冻结日历。
 
-SQLite `monitors` 存目录配置，`observations` 存首次发现、最近观察到的更新、指纹、大小等元数据；外键删除只清理该目录的记录。不存在永久 Pending 表。到期 = max(首次发现, 最近活动) + 天数，到期清单随当下状态重新计算。
+首选 EXE 旁 data；已有 data-v2 库优先复用，程序目录不可写时回退 LocalAppData。允许高级命令行 `--data "绝对目录"`；传入路径无效时直接报错，不静默换库。自包含单文件 EXE 中的原生 DLL 会由 .NET 提取到运行时缓存，不承诺机器上只产生一个文件。
 
-SQLite 使用 WAL、外键和每目录事务；目录枚举完整成功后才替换其记录。停用、非选中目录、访问失败的目录保留历史。空目录成功时清空该目录旧记录。路径编辑时只重置该目录历史，天数/启停/模式编辑不重置。
+日志默认 10 MiB，总额分为当前和一个轮换文件，额度调整后的下一次写入执行收缩。归档只删除本程序轮换日志，不删除其他文件。
 
-`FileSystemWatcher` 后续记录在线进入和变化并做防抖；定期完整校正弥补溢出/缺失事件。无法观测的离线进入采用首次发现时刻，避免拿旧修改时间提前删除。指纹包含文件路径/长度/修改时刻，目录指纹包括内部条目；不读取用户文件内容，不跟随链接。
+正式发布白名单为 EXE、README、CHANGELOG、LICENSE 和 docs，不含源码工具链或个人数据。
 
-目录访问失败时暂不发该目录的清理授权；最终执行前必须重新验证。单元的删除结果独立记录，某项失败不回滚已经成功进入回收站的其他项。
+## 已知边界
 
-## 调度设计
-
-新任务名拟用 `FolderNest V2 DailyScan`、`FolderNest V2 OnlineReminder`，与旧版独立。任务关联本地当前用户、绝对 EXE 路径和当前数据位置，启用错过运行补偿；GUI 可选择参与目录和 24 小时时间。
-
-提醒任务只能在交互登录会话中显示通知；每日触发、登录、恢复后统一走提醒策略。持久记录当天提醒尝试日期以去重（不是持久待处理清单）；无到期项目不标记提醒，晚些时候实际出现到期项目仍可提醒。关闭/忽略后不循环追催，下一天重新计算。
-
-如果没有交互用户，扫描结果元数据可保存，但不能弹窗口。机器关机时不执行任何代码；已存截止时间仍推进。重开机时补算一次即可，不为离线每一天伪造扫描日志。
-
-## 便携与历史迁移
-
-正式 EXE 所在目录可移动，数据随便携目录迁移；移动后 GUI 重部署任务更新路径。框架预览数据默认放 EXE 旁 `data-v2/`，不可写时回退 `%LOCALAPPDATA%/FolderNest/v2/` 并在窗口展示。日志仅两份，总计 10 MiB。单文件 EXE 的 .NET/SQLite 原生依赖可能由运行时解压到用户临时缓存，不在那里保存业务配置。
-
-旧 `data/config.json` / `state.json` 在本轮保留。后续只经用户在 GUI 发起导入，验证路径和规则，保留可信 FirstSeen，缺失/无效记录保守重置；不自动复制旧 Pending。导入前保存备份，并检测旧版任务避免两版一起提醒。
+不实现关机扫描、Windows 服务、USN Journal 离线重放、跨平台或内容级版本识别。Windows 通知受系统设置限制；回收站可恢复性受磁盘和系统限制。路径复查可防常见变化/链接替换，但不是抵御恶意并发攻击的原子文件句柄删除机制。README 明确这些边界，不夸大可靠性。
