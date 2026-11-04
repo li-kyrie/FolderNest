@@ -19,7 +19,7 @@ public static class LegacyImporter
             var mode=monitor.TryGetProperty("DeleteMode",out var m) && m.GetString()=="Permanent" ? DeletionMode.Permanent : DeletionMode.RecycleBin;
             // Import configuration only: a stale old Pending/FirstSeen cannot authorize early cleanup.
             result.Add(new(Guid.NewGuid(),MonitorValidation.NormalizePath(path!),days,mode,
-                !monitor.TryGetProperty("Enabled",out var e) || e.GetBoolean(),false));
+                !monitor.TryGetProperty("Enabled",out var e) || e.GetBoolean()));
         }
         return result;
     }

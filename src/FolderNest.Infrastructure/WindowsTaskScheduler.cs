@@ -11,7 +11,7 @@ namespace FolderNest.Infrastructure;
 public sealed class WindowsTaskScheduler(string dataDirectory, IAuditLog log, string? namePrefix = null, Func<TimeOnly>? expectedDailyTime = null) : ITaskScheduler
 {
     private readonly string sid = WindowsIdentity.GetCurrent().User!.Value;
-    public string Prefix => namePrefix ?? $"FolderNest 2 {sid}";
+    public string Prefix => namePrefix ?? "FolderNest";
     private string[] Names => [Prefix + " Daily", Prefix + " Logon"];
     private dynamic Connect()
     {
@@ -55,8 +55,21 @@ public sealed class WindowsTaskScheduler(string dataDirectory, IAuditLog log, st
         try{return root.GetTask(name);}
         catch(Exception ex) when(ex.HResult==unchecked((int)0x80070002) || ex.HResult==unchecked((int)0x8004130F)){return null;}
     }
-    private bool SameUser(string value)=>string.Equals(value,sid,StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(((SecurityIdentifier)new NTAccount(value).Translate(typeof(SecurityIdentifier))).Value,sid,StringComparison.OrdinalIgnoreCase);
+    private bool SameUser(string value)
+    {
+        if(string.Equals(value,sid,StringComparison.OrdinalIgnoreCase))return true;
+        try{return string.Equals(((SecurityIdentifier)new NTAccount(value).Translate(typeof(SecurityIdentifier))).Value,sid,StringComparison.OrdinalIgnoreCase);}
+        catch(IdentityNotMappedException){return false;}
+    }
+    private void CheckOwnership(dynamic task)
+    {
+        string description=(string)task.Definition.RegistrationInfo.Description;
+        if(!SameUser((string)task.Definition.Principal.UserId) ||
+            !description.StartsWith("FolderNest",StringComparison.Ordinal) ||
+            (int)task.Definition.Actions.Count!=1 ||
+            !string.Equals((string)task.Definition.Actions.Item(1).Arguments,Arguments,StringComparison.Ordinal))
+            throw new IOException("同名任务不属于当前用户和数据目录，未覆盖或删除。请使用原数据位置打开 FolderNest，或检查 Windows 任务计划程序中的同名任务。");
+    }
     private string Arguments => $"--background --data \"{Path.TrimEndingDirectorySeparator(Path.GetFullPath(dataDirectory))}\"";
     public TaskStatus Deploy(ScheduleSettings settings,string executablePath)
     {
@@ -65,13 +78,17 @@ public sealed class WindowsTaskScheduler(string dataDirectory, IAuditLog log, st
             throw new ArgumentException("任务使用 Windows 本地时区，请重新保存设置。");
         dynamic service=Connect();dynamic root=service.GetFolder("\\");
         var backups=new Dictionary<string,string?>();
-        foreach(var name in Names){dynamic? task=Find(root,name);backups[name]=task is null ? null : (string)task.Xml;}
+        foreach(var name in Names)
+        {
+            dynamic? task=Find(root,name);if(task is not null)CheckOwnership(task);
+            backups[name]=task is null ? null : (string)task.Xml;
+        }
         try
         {
             foreach(var name in Names)
             {
                 dynamic definition=service.NewTask(0);
-                definition.RegistrationInfo.Description="FolderNest 2.0：检查到期项目并在当前用户登录时提醒；不会自动删除。";
+                definition.RegistrationInfo.Description="FolderNest：每日及登录后检查启用的监控目录；仅提醒，不自动删除。";
                 definition.Principal.UserId=sid;definition.Principal.LogonType=3;definition.Principal.RunLevel=0;
                 definition.Settings.Enabled=true;definition.Settings.StartWhenAvailable=true;
                 definition.Settings.DisallowStartIfOnBatteries=false;definition.Settings.StopIfGoingOnBatteries=false;
@@ -88,6 +105,7 @@ public sealed class WindowsTaskScheduler(string dataDirectory, IAuditLog log, st
             }
             var verification=Query(settings.DailyTime);
             if(verification.Deployment!=TaskDeployment.Installed)throw new IOException("任务写入后核验失败："+verification.Details);
+            RemoveLegacyTasks(root);
             return verification;
         }
         catch(Exception ex)
@@ -101,7 +119,26 @@ public sealed class WindowsTaskScheduler(string dataDirectory, IAuditLog log, st
     public TaskStatus Remove()
     {
         dynamic service=Connect();dynamic root=service.GetFolder("\\");
+        foreach(var name in Names){dynamic? task=Find(root,name);if(task is not null)CheckOwnership(task);}
         foreach(var name in Names)if(Find(root,name) is not null){root.DeleteTask(name,0);log.Write("task-remove",name);}
+        RemoveLegacyTasks(root);
         return GetStatus();
+    }
+    private void RemoveLegacyTasks(dynamic root)
+    {
+        if(namePrefix is not null)return; // Isolated adapter tests never touch production tasks.
+        foreach(var name in new[]{"FolderNest 2 "+sid+" Daily","FolderNest 2 "+sid+" Logon"})
+        {
+            dynamic? task=Find(root,name);if(task is null)continue;
+            try
+            {
+                CheckOwnership(task);
+                var backup=Path.Combine(dataDirectory,"legacy-backup","tasks-v2");Directory.CreateDirectory(backup);
+                var target=Path.Combine(backup,name+".xml");
+                if(!File.Exists(target))File.WriteAllText(target,(string)task.Xml);
+                root.DeleteTask(name,0);log.Write("task-migrate",name+" → "+Prefix+"；XML="+target);
+            }
+            catch(Exception ex){log.Write("task-migrate-skipped",name+"；"+ex.Message);}
+        }
     }
 }

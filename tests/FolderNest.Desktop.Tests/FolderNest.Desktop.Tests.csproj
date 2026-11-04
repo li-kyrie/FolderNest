@@ -5,4 +5,5 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../../src/FolderNest.Desktop/FolderNest.Desktop.csproj" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="../../src/FolderNest.Desktop/App.xaml" LogicalName="ProductionApp.xaml" /></ItemGroup>
 </Project>

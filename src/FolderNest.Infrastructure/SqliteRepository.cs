@@ -18,11 +18,14 @@ public sealed class SqliteRepository : IMonitorRepository
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS monitors(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS monitor_order(
+              monitor_id TEXT PRIMARY KEY REFERENCES monitors(id) ON DELETE CASCADE,
+              position INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS observations(
               monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
               path TEXT NOT NULL COLLATE NOCASE, payload TEXT NOT NULL,
               PRIMARY KEY(monitor_id,path));
-            PRAGMA user_version=1;
+            PRAGMA user_version=2;
             """;
         command.ExecuteNonQuery();
     }
@@ -44,7 +47,7 @@ public sealed class SqliteRepository : IMonitorRepository
     public IReadOnlyList<MonitorDefinition> GetMonitors()
     {
         using var c = Open(); using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT payload FROM monitors ORDER BY rowid";
+        cmd.CommandText = "SELECT m.payload FROM monitors m LEFT JOIN monitor_order o ON m.id=o.monitor_id ORDER BY COALESCE(o.position,2147483647),m.rowid";
         using var reader = cmd.ExecuteReader(); var result = new List<MonitorDefinition>();
         while(reader.Read()) result.Add(JsonSerializer.Deserialize<MonitorDefinition>(reader.GetString(0))!);
         return result;
@@ -76,16 +79,18 @@ public sealed class SqliteRepository : IMonitorRepository
         cmd.Parameters.AddWithValue("$id", id.ToString()); cmd.ExecuteNonQuery();
     }
 
-    public void SetScheduled(IReadOnlySet<Guid> selected)
+    public void SaveOrder(IReadOnlyList<Guid> ids)
     {
-        var monitors=GetMonitors();
         using var c=Open();using var tx=c.BeginTransaction();
-        foreach(var m in monitors)
+        using var read=c.CreateCommand();read.Transaction=tx;read.CommandText="SELECT id FROM monitors";
+        var actual=new HashSet<Guid>();using(var reader=read.ExecuteReader())while(reader.Read())actual.Add(Guid.Parse(reader.GetString(0)));
+        if(ids.Count!=actual.Count || ids.Distinct().Count()!=ids.Count || !actual.SetEquals(ids))
+            throw new ArgumentException("目录列表已变化，请刷新后重新排序。");
+        for(var i=0;i<ids.Count;i++)
         {
             using var cmd=c.CreateCommand();cmd.Transaction=tx;
-            cmd.CommandText="UPDATE monitors SET payload=$payload WHERE id=$id";
-            cmd.Parameters.AddWithValue("$id",m.Id.ToString());
-            cmd.Parameters.AddWithValue("$payload",JsonSerializer.Serialize(m with {Scheduled=m.Enabled && selected.Contains(m.Id)}));cmd.ExecuteNonQuery();
+            cmd.CommandText="INSERT INTO monitor_order(monitor_id,position) VALUES($id,$position) ON CONFLICT(monitor_id) DO UPDATE SET position=excluded.position";
+            cmd.Parameters.AddWithValue("$id",ids[i].ToString());cmd.Parameters.AddWithValue("$position",i);cmd.ExecuteNonQuery();
         }
         tx.Commit();
     }

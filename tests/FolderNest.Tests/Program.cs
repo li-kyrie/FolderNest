@@ -110,9 +110,9 @@ try
     });
     Test("Unavailable expired folder is excluded from notification results",()=>
     {
-        var missing=Path.Combine(temp,"missing");var m=new MonitorDefinition(Guid.NewGuid(),missing,1,Scheduled:true);
+        var missing=Path.Combine(temp,"missing");var m=new MonitorDefinition(Guid.NewGuid(),missing,1);
         repo.SaveMonitor(m);repo.ReplaceObservations(m.Id,[new(m.Id,Path.Combine(missing,"x"),false,1,"x",now.AddDays(-5),now.AddDays(-5))]);
-        var result=new ScanService(repo,new LocalFileInventory(),new FakeClock(now),new NoLog()).Scan(ScanScope.Scheduled);
+        var result=new ScanService(repo,new LocalFileInventory(),new FakeClock(now),new NoLog()).Scan(ScanScope.AllEnabled);
         Assert(result.DueItems.Count==0 && result.Errors.Count==1,"unavailable folder notified");repo.RemoveMonitor(m.Id);
     });
     Test("App settings persist, reject invalid time and log limits",()=>
@@ -189,10 +189,58 @@ try
         for(int i=0;i<1100;i++)log.Write("test",new string('x',8192));limit=2;log.Write("settings","shrink");
         Assert(Directory.GetFiles(Path.GetDirectoryName(path)!).Sum(p=>new FileInfo(p).Length)<=2*1024*1024,"shrink exceeds cap");
     });
-    Test("Legacy import is configuration only with fresh IDs and manual scheduling",()=>
+    Test("Legacy import reads configuration without modifying its source",()=>
     {
         var path=Path.Combine(temp,"config.json");File.WriteAllText(path,System.Text.Json.JsonSerializer.Serialize(new{Monitors=new[]{new{Path=folderA,Days=14,DeleteMode="RecycleBin",Enabled=true,Scheduled=true}}}));
-        var m=LegacyImporter.Read(path).Single();Assert(m.Path==folderA && m.RetentionDays==14 && !m.Scheduled && File.Exists(path),"legacy migration altered source or deployed");
+        var source=File.ReadAllText(path);var m=LegacyImporter.Read(path).Single();
+        Assert(m.Path==folderA && m.RetentionDays==14 && m.Enabled && source==File.ReadAllText(path),"legacy migration altered source");
+    });
+    Test("Ordering persists without resetting observations; invalid orders roll back",()=>
+    {
+        var r=new SqliteRepository(Path.Combine(temp,"ordering.db"));
+        var x=new MonitorDefinition(Guid.NewGuid(),folderA);var y=new MonitorDefinition(Guid.NewGuid(),folderB);
+        r.SaveMonitor(x);r.SaveMonitor(y);
+        var o=ExpiryPolicy.Observe(x.Id,new(Path.Combine(folderA,"test.txt"),false,1,"x"),null,now);r.ReplaceObservations(x.Id,[o]);
+        r.SaveOrder([y.Id,x.Id]);
+        var reopened=new SqliteRepository(Path.Combine(temp,"ordering.db"));
+        Assert(reopened.GetMonitors().Select(m=>m.Id).SequenceEqual(new[]{y.Id,x.Id}),"order not persisted");
+        Assert(reopened.GetObservations(x.Id).Single()==o,"sort changed history");
+        var rejected=false;try{r.SaveOrder([x.Id,x.Id]);}catch(ArgumentException){rejected=true;}
+        Assert(rejected&&r.GetMonitors()[0].Id==y.Id,"invalid order accepted or partially committed");
+        r.RemoveMonitor(y.Id);r.SaveOrder([x.Id]);Assert(r.GetMonitors().Count==1,"order foreign key orphan");
+    });
+    Test("Selected reset preserves siblings, files, timestamps and enabled state",()=>
+    {
+        var root=Directory.CreateDirectory(Path.Combine(temp,"reset")).FullName;
+        var file=Path.Combine(root,"one.txt");File.WriteAllText(file,"one");File.WriteAllText(Path.Combine(root,"two.txt"),"two");
+        var sub=Directory.CreateDirectory(Path.Combine(root,"group")).FullName;File.WriteAllText(Path.Combine(sub,"nested.txt"),"nested");
+        var m=new MonitorDefinition(Guid.NewGuid(),root,30,Enabled:false);repo.SaveMonitor(m);
+        var inventory=new LocalFileInventory();var old=inventory.Enumerate(root).Select(u=>ExpiryPolicy.Observe(m.Id,u,null,now.AddDays(-40))).ToArray();repo.ReplaceObservations(m.Id,old);
+        var stamp=File.GetLastWriteTimeUtc(file);var reset=new TimingResetService(repo,inventory,new FakeClock(now),new NoLog());
+        var result=reset.Reset([new(m.Id,new HashSet<string>(StringComparer.OrdinalIgnoreCase){file.ToUpperInvariant()})]);
+        Assert(result.Single().ResetCount==1&&result[0].Error is null,"partial reset failed");
+        var current=repo.GetObservations(m.Id);Assert(current.Single(o=>o.Path==file).FirstSeenUtc==now,"selected file not reset");
+        Assert(current.Where(o=>o.Path!=file).All(o=>old.Contains(o)),"unselected sibling changed");
+        Assert(File.ReadAllText(file)=="one"&&File.GetLastWriteTimeUtc(file)==stamp&&!repo.GetMonitors().Single(x=>x.Id==m.Id).Enabled,"reset changed file or enabled state");
+        Assert(reset.Reset([new(m.Id,new HashSet<string>())]).Count==0,"empty selection had effects");
+        var before=repo.GetObservations(m.Id).ToArray();
+        var failed=reset.Reset([new(m.Id,new HashSet<string>{file,Path.Combine(root,"missing.txt")})]);
+        Assert(failed.Single().Error is not null&&repo.GetObservations(m.Id).SequenceEqual(before),"failed reset partially committed");
+        var grouped=reset.Reset([new(m.Id,new HashSet<string>{sub})]);
+        Assert(grouped.Single().ResetCount==1&&repo.GetObservations(m.Id).Single(o=>o.Path==sub).FirstSeenUtc==now,"subfolder unit not reset");
+        File.WriteAllText(Path.Combine(root,"new.txt"),"new");
+        Assert(reset.Reset([new(m.Id)]).Single().ResetCount==4,"whole directory missed live units");
+        Assert(repo.GetObservations(m.Id).All(o=>o.FirstSeenUtc==now&&o.LastActivityUtc==now),"whole reset incomplete");
+        Directory.Move(root,root+"-offline");before=repo.GetObservations(m.Id).ToArray();
+        Assert(reset.Reset([new(m.Id)]).Single().Error is not null&&repo.GetObservations(m.Id).SequenceEqual(before),"offline reset lost history");
+        Directory.Move(root+"-offline",root);repo.RemoveMonitor(m.Id);
+    });
+    Test("2.0 JSON monitor records retain IDs and history when obsolete selection is ignored",()=>
+    {
+        var id=Guid.NewGuid();var json=System.Text.Json.JsonSerializer.Serialize(new{Id=id,Path=folderA,RetentionDays=9,DeletionMode=0,Enabled=false,Scheduled=true});
+        var m=System.Text.Json.JsonSerializer.Deserialize<MonitorDefinition>(json)!;
+        Assert(m.Id==id&&!m.Enabled&&m.RetentionDays==9,"2.0 monitor migration lost configuration");
+        Assert(new WindowsTaskScheduler(temp,new NoLog()).Prefix=="FolderNest","default task name includes version");
     });
     if(OperatingSystem.IsWindows())Test("Real isolated Task Scheduler deployment, XML, status and removal",()=>
     {
@@ -208,6 +256,11 @@ try
             var xml=(string)root.GetTask(prefix+" Daily").Xml;
             Assert(xml.Contains("23:59:00") && xml.Contains("InteractiveToken") && xml.Contains("--background") && xml.Contains("StartWhenAvailable"),"incorrect task definition");
             Assert(new WindowsTaskScheduler(temp,new NoLog(),prefix,()=>new TimeOnly(22,0)).GetStatus().Deployment==TaskDeployment.Partial,"external time mismatch not detected");
+            var foreign=new WindowsTaskScheduler(Path.Combine(temp,"different-data"),new NoLog(),prefix);
+            var rejected=false;try{foreign.Deploy(settings,Environment.ProcessPath!);}catch(IOException){rejected=true;}
+            Assert(rejected&&scheduler.GetStatus().Deployment==TaskDeployment.Installed,"different data deployment overwrote existing plans");
+            rejected=false;try{foreign.Remove();}catch(IOException){rejected=true;}
+            Assert(rejected&&scheduler.GetStatus().Deployment==TaskDeployment.Installed,"different data removal deleted plans");
             root.DeleteTask(prefix+" Logon",0);Assert(scheduler.GetStatus().Deployment==TaskDeployment.Partial,"missing task not partial");
             Assert(scheduler.Remove().Deployment==TaskDeployment.NotInstalled,"remove left task");
         }

@@ -1,11 +1,11 @@
 namespace FolderNest.Core;
 
 public enum DeletionMode { RecycleBin, Permanent }
-public enum ScanScope { AllEnabled, Selected, Scheduled }
+public enum ScanScope { AllEnabled, Selected }
 public enum TaskDeployment { NotInstalled, Installed, Partial, Unknown }
 
 public sealed record MonitorDefinition(Guid Id, string Path, int RetentionDays = 30,
-    DeletionMode DeletionMode = DeletionMode.RecycleBin, bool Enabled = true, bool Scheduled = false);
+    DeletionMode DeletionMode = DeletionMode.RecycleBin, bool Enabled = true);
 
 public sealed record FileUnit(string Path, bool IsDirectory, long Size, string Fingerprint);
 public sealed record Observation(Guid MonitorId, string Path, bool IsDirectory, long Size,
@@ -16,6 +16,9 @@ public sealed record ScheduleSettings(TimeOnly DailyTime, string TimeZoneId);
 public sealed record TaskStatus(TaskDeployment Deployment, string Details);
 public sealed record CleanupRequest(IReadOnlyList<DueItem> SelectedItems, DeletionMode? Mode = null);
 public sealed record CleanupResult(string Path, bool Success, string? Error);
+// Paths == null means all current cleanup units in this monitor. Empty means no selection.
+public sealed record TimingResetSelection(Guid MonitorId, IReadOnlySet<string>? Paths = null);
+public sealed record TimingResetResult(Guid MonitorId, int ResetCount, string? Error);
 
 public interface IClock { DateTimeOffset UtcNow { get; } }
 public sealed class SystemClock : IClock { public DateTimeOffset UtcNow => DateTimeOffset.UtcNow; }

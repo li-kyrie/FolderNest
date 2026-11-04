@@ -47,9 +47,9 @@ public partial class App : Application
             dataLock=new FileStream(Path.Combine(paths.DataDirectory,"foldernest.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);
             var repository=new SqliteRepository(paths.DatabasePath);
             var log=new RollingAuditLog(paths.LogPath,()=>repository.ReadSettings().LogLimitMiB);
-            vm=new(repository,log,paths);
+            vm=new(repository,log,paths,manageSchedule:!e.Args.Contains("--smoke-test")&&!e.Args.Contains("--no-schedule"));
             window=new(vm); MainWindow=window;
-            log.Write("startup",$"FolderNest 2.0.0；数据：{paths.DataDirectory}");
+            log.Write("startup",$"FolderNest 2.1.0；数据：{paths.DataDirectory}");
             if(e.Args.Contains("--smoke-test"))
             {
                 window.Show();
@@ -58,14 +58,14 @@ public partial class App : Application
             }
             var stream=GetResourceStream(new Uri("pack://application:,,,/Assets/FolderNest.ico")).Stream;
             using(stream)using(var icon=new System.Drawing.Icon(stream))
-                tray=new Forms.NotifyIcon {Icon=(System.Drawing.Icon)icon.Clone(),Text="FolderNest 2.0",Visible=true};
+                tray=new Forms.NotifyIcon {Icon=(System.Drawing.Icon)icon.Clone(),Text="FolderNest",Visible=true};
             var menu=new Forms.ContextMenuStrip();
             menu.Items.Add("打开 FolderNest",null,(_,_)=>ShowMain());
             menu.Items.Add("查看到期清单",null,async (_,_)=>{ShowMain();await window.OpenReviewAsync();});
             menu.Items.Add("退出程序",null,(_,_)=>ExitApplication());
             tray.ContextMenuStrip=menu;
             tray.DoubleClick+=(_,_)=>ShowMain();
-            tray.BalloonTipClicked+=async (_,_)=>{ShowMain();await window.OpenReviewAsync(true);};
+            tray.BalloonTipClicked+=async (_,_)=>{ShowMain();await window.OpenReviewAsync();};
             vm.Reminder+=(_,count)=>tray.ShowBalloonTip(10000,"FolderNest · 到期提醒",$"{count} 项已到期。点击查看、取消勾选并确认清理。",Forms.ToolTipIcon.Info);
             if(!e.Args.Contains("--background"))window.Show();
             timer=new DispatcherTimer {Interval=TimeSpan.FromSeconds(3)};

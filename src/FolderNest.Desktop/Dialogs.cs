@@ -105,43 +105,6 @@ public sealed class SettingsWindow : Window
     }
 }
 
-public sealed class ScheduleDialog : Window
-{
-    public ScheduleDialog(MainViewModel vm)
-    {
-        Title="选择参与自动扫描的目录";Width=650;Height=430;
-        MinWidth=450;MinHeight=300;ShowInTaskbar=false;WindowStartupLocation=WindowStartupLocation.CenterOwner;
-        var panel=new DockPanel {Margin=new Thickness(12)};Content=panel;
-        var text=new TextBlock {Text=$"每天 {vm.Settings.DailyTime} + 当前用户登录后检查；两条全局任务共用下列选择。停用目录不能参与。",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(4,0,4,8)};
-        DockPanel.SetDock(text,Dock.Top);panel.Children.Add(text);
-        var footer=new StackPanel();DockPanel.SetDock(footer,Dock.Bottom);panel.Children.Add(footer);
-        var error=new TextBlock {Foreground=System.Windows.Media.Brushes.Firebrick,TextWrapping=TextWrapping.Wrap};footer.Children.Add(error);
-        var buttons=new StackPanel {Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};footer.Children.Add(buttons);
-        var choices=vm.Monitors.Select(r=>new ScheduleChoice(r)).ToArray();
-        var grid=new DataGrid {ItemsSource=choices,AutoGenerateColumns=false,CanUserAddRows=false,CanUserDeleteRows=false};
-        grid.Columns.Add(new DataGridTemplateColumn {Header="参与",Width=60,CellTemplate=CheckTemplate()});
-        grid.Columns.Add(new DataGridTextColumn {Header="目录",Binding=new Binding(nameof(ScheduleChoice.Path)),IsReadOnly=true,Width=new DataGridLength(1,DataGridLengthUnitType.Star)});
-        grid.Columns.Add(new DataGridTextColumn {Header="状态",Binding=new Binding(nameof(ScheduleChoice.State)),IsReadOnly=true});panel.Children.Add(grid);
-        buttons.Children.Add(DialogUi.Button("全部启用目录",()=>{foreach(var c in choices)c.Selected=c.Enabled;grid.Items.Refresh();}));
-        buttons.Children.Add(DialogUi.Button("部署并保存",()=>
-        {
-            try{grid.CommitEdit();vm.Deploy(choices.Where(c=>c.Selected&&c.Enabled).Select(c=>c.Id).ToHashSet());DialogResult=true;}
-            catch(Exception ex){error.Text=ex.Message;}
-        }));var cancel=DialogUi.Button("取消",()=>DialogResult=false);cancel.IsCancel=true;buttons.Children.Add(cancel);
-    }
-    private static DataTemplate CheckTemplate()
-    {
-        var template=new DataTemplate();var box=new FrameworkElementFactory(typeof(CheckBox));
-        box.SetBinding(CheckBox.IsCheckedProperty,new Binding(nameof(ScheduleChoice.Selected)){Mode=BindingMode.TwoWay,UpdateSourceTrigger=UpdateSourceTrigger.PropertyChanged});
-        box.SetBinding(CheckBox.IsEnabledProperty,new Binding(nameof(ScheduleChoice.Enabled)));
-        box.SetValue(CheckBox.HorizontalAlignmentProperty,HorizontalAlignment.Center);box.SetValue(System.Windows.Automation.AutomationProperties.NameProperty,"参与此目录自动扫描");template.VisualTree=box;return template;
-    }
-    private sealed class ScheduleChoice(MonitorRow row)
-    {
-        public Guid Id=>row.Id;public string Path=>row.Definition.Path;public bool Enabled=>row.Enabled;
-        public string State=>Enabled?"启用":"停用";public bool Selected {get;set;}=row.Scheduled;
-    }
-}
 
 public sealed class ReviewWindow : Window
 {

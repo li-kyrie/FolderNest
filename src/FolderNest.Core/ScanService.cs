@@ -11,7 +11,6 @@ public sealed class ScanService(IMonitorRepository repository, IFileInventory in
         var available = new HashSet<Guid>();
         foreach (var monitor in repository.GetMonitors().Where(m => m.Enabled && (scope switch
         {
-            ScanScope.Scheduled => m.Scheduled,
             ScanScope.Selected => selected!.Contains(m.Id),
             _ => true
         })))
@@ -37,7 +36,6 @@ public sealed class ScanService(IMonitorRepository repository, IFileInventory in
         }
         var due = GetDue().Where(i => available.Contains(i.Monitor.Id) && (scope switch
         {
-            ScanScope.Scheduled => i.Monitor.Scheduled,
             ScanScope.Selected => selected!.Contains(i.Monitor.Id),
             _ => true
         })).ToArray();
