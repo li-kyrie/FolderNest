@@ -49,7 +49,7 @@ public partial class App : Application
             var log=new RollingAuditLog(paths.LogPath,()=>repository.ReadSettings().LogLimitMiB);
             vm=new(repository,log,paths,manageSchedule:!e.Args.Contains("--smoke-test")&&!e.Args.Contains("--no-schedule"));
             window=new(vm); MainWindow=window;
-            log.Write("startup",$"FolderNest 2.1.0；数据：{paths.DataDirectory}");
+            log.Write("startup",$"FolderNest 2.1.1；数据：{paths.DataDirectory}");
             if(e.Args.Contains("--smoke-test"))
             {
                 window.Show();

@@ -130,6 +130,7 @@ internal static class Program
             Check("Production windows use taskbar icon, native multiselect and simplified columns",()=>
             {
                 var main=new MainWindow(vm);Assert(main.ShowInTaskbar&&main.Icon is not null,"missing taskbar icon");
+                Assert(vm.ConfigurationText.Contains(vm.Paths.DatabasePath),"configuration location missing");
                 var grid=(DataGrid)main.FindName("MonitorGrid");
                 Assert(grid.SelectionMode==DataGridSelectionMode.Extended&&grid.Columns.Count==5&&!grid.CanUserSortColumns,"unexpected grid columns/selection");
                 var monitor=new MonitorDialog(vm);Assert(monitor.Width==560&&monitor.Height==240,"dialog resized");
@@ -148,10 +149,11 @@ internal static class Program
                         var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(bitmap));
                         using var stream=File.Create(Path.Combine(args[1],name+".png"));encoder.Save(stream);
                     }
-                    Render(main,1076,610,"main-default");Render(main,736,430,"main-small");
+                    Render(main,1076,630,"main-default");Render(main,736,450,"main-small");
                     Assert(grid.ActualHeight>70,"small window clipped directory list");
                     Render(monitor,536,190,"add-monitor");
                     Render(new RemoveMonitorsWindow(vm,[second]),676,380,"remove-monitors");
+                    Render(new ImportPreviewWindow([row!.Definition]),776,350,"import-preview");
                 }
             });
             Check("Empty selected scan is rejected instead of scanning every directory",()=>

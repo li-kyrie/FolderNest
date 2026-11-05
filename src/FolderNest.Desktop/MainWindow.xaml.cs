@@ -123,12 +123,15 @@ public partial class MainWindow : Window
         try
         {
             CommitEdits();
-            var picker=new OpenFileDialog{Title="导入旧版 config.json（只导入监控设置）",Filter="JSON 配置|*.json",FileName="config.json"};
+            var picker=new OpenFileDialog{Title="导入监控配置（JSON）",Filter="JSON 配置|*.json"};
             var backup=Path.Combine(AppContext.BaseDirectory,"data","legacy-backup");
             if(Directory.Exists(backup))picker.InitialDirectory=backup;
             if(picker.ShowDialog(this)!=true)return;
+            var monitors=MonitorConfigImporter.Read(picker.FileName);
+            foreach(var m in monitors)vm.Validate(m);
+            if(new ImportPreviewWindow(monitors){Owner=this,Icon=Icon}.ShowDialog()!=true)return;
             var errors=new List<string>();int count=0;
-            foreach(var m in LegacyImporter.Read(picker.FileName))try{await vm.AddAsync(m);count++;}catch(Exception ex){errors.Add(m.Path+"："+ex.Message);}
+            foreach(var m in monitors)try{await vm.AddAsync(m);count++;}catch(Exception ex){errors.Add(m.Path+"："+ex.Message);}
             MessageBox.Show(this,$"已导入 {count} 个目录，从导入时重新计时；后台扫描自动设置。源 JSON 未修改。"+(errors.Count>0?"\n"+string.Join("\n",errors):""),"导入结果");
         }
         catch(Exception ex){Error(ex);}

@@ -1,4 +1,4 @@
-# FolderNest 2.1 架构
+# FolderNest 2.1.1 架构
 
 2026-11-04。唯一运行框架为 C# / .NET 10 + WPF + SQLite。WinForms 仅用于 NotifyIcon，Microsoft.VisualBasic.FileIO 用于系统删除适配，均在同一自包含 EXE 内。无旧 PowerShell 运行依赖。
 
@@ -15,7 +15,8 @@
 | Infrastructure | LocalFileInventory、ArrivalTracker | 根文件/一级子文件夹元数据指纹、事件观察、重解析点边界 |
 | Infrastructure | WindowsTaskScheduler | 两条全局计划的自动维护、核验、回滚、同数据旧任务归档迁移和所有权保护 |
 | Infrastructure | WindowsFileDeletion | 拒绝链接祖先/后代，调用回收站/永久删除 |
-| Infrastructure | PortablePaths、RollingAuditLog、LegacyImporter | 便携路径、总额日志、显式只读旧 JSON 转换 |
+| Infrastructure | PortablePaths、RollingAuditLog、MonitorConfigImporter | 便携路径、总额日志、监控 JSON 严格校验与兼容转换 |
+| Desktop | ImportPreviewWindow | 导入前只读预览，确认后新增，不同步源 JSON |
 | Desktop | App | WinExe、图标、单实例/数据锁、托盘、Dispatcher 轮询 |
 | Desktop | MainViewModel、MonitorRow | 配置状态、串行门控、自动调度、合法编辑、稳定行对象 |
 | Desktop | MainWindow、Dialogs、MonitorActions、Controls | 目录管理、选择保持、排序、添加/删除/重置/设置/到期清单和整数微调 |
@@ -65,6 +66,8 @@ SQLite monitors 保存类型化 JSON，observations 以 monitor_id/path 为键�
 
 --smoke-test 使用独立临时库验证启动，不改 Windows 任务；--no-schedule 是开发诊断开关，禁用自动任务管理/后台轮询，仅保留手动操作，不用于日常启动。
 
-ZIP 按白名单仅 EXE/README/CHANGELOG/LICENSE/docs，不含个人库/日志/归档或 SDK。单文件原生库可解压到系统运行时缓存。
+成品独立位于 产品/FolderNest，源码和正式构建工具保留在 src/tests/scripts。ZIP 按白名单仅 EXE/README/CHANGELOG/LICENSE/docs/examples，不含个人库/日志/归档或 SDK；发布包附带 SHA256，二进制通过 GitHub 稳定 Release 分发。单文件原生库可解压到系统运行时缓存。
+
+主界面分别显示实际数据目录和配置 SQLite 文件路径。JSON 导入模板只用于显式新增配置；校验字段、类型、范围、路径和重复/包含关系，再预览确认。导入保留源文件，但不导入历史计时、不覆盖现有配置，也不持续监听 JSON。实际运行设置和计时共同位于 foldernest.db。
 
 不承诺关机物理扫描、USN 离线重放、内容级版本识别、Windows 通知可见时长、网络盘回收站支持或抵御恶意并发替换。元数据指纹不等于内容哈希；实际删除前的路径复查不是文件句柄级沙箱。

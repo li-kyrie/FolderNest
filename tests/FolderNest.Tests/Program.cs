@@ -192,8 +192,24 @@ try
     Test("Legacy import reads configuration without modifying its source",()=>
     {
         var path=Path.Combine(temp,"config.json");File.WriteAllText(path,System.Text.Json.JsonSerializer.Serialize(new{Monitors=new[]{new{Path=folderA,Days=14,DeleteMode="RecycleBin",Enabled=true,Scheduled=true}}}));
-        var source=File.ReadAllText(path);var m=LegacyImporter.Read(path).Single();
+        var source=File.ReadAllText(path);var m=MonitorConfigImporter.Read(path).Single();
         Assert(m.Path==folderA && m.RetentionDays==14 && m.Enabled && source==File.ReadAllText(path),"legacy migration altered source");
+    });
+    Test("Monitor import rejects invalid types, unknown fields and duplicate paths",()=>
+    {
+        var path=Path.Combine(temp,"import.json");
+        void Rejected(string json)
+        {
+            File.WriteAllText(path,json);var failed=false;
+            try{MonitorConfigImporter.Read(path);}catch(Exception ex) when(ex is ArgumentException or System.Text.Json.JsonException){failed=true;}
+            Assert(failed,"invalid configuration accepted: "+json);
+        }
+        var escaped=System.Text.Json.JsonSerializer.Serialize(folderA);
+        foreach(var fields in new[]{"\"Days\":1.5","\"Days\":0","\"Days\":36501","\"Enabled\":\"false\"","\"DeleteMode\":\"Permnent\"","\"Day\":30","\"Days\":1,\"Days\":2"})
+            Rejected("{\"Path\":"+escaped+","+fields+"}");
+        Rejected("{\"Monitors\":[]}");Rejected("{\"Monitors\":[{\"Path\":"+escaped+"},{\"Path\":"+escaped+"}]}");
+        File.WriteAllText(path,"{\"Root\":"+escaped+"}");
+        Assert(MonitorConfigImporter.Read(path).Single().RetentionDays==30,"legacy defaults failed");
     });
     Test("Ordering persists without resetting observations; invalid orders roll back",()=>
     {

@@ -9,6 +9,8 @@ data/
 data-v2/
 .tools/
 artifacts/
+产品/FolderNest/
+发布包/
 TestResults/
 /FolderNest.exe
 *.db

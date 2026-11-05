@@ -51,6 +51,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public string BackgroundText=>$"后台扫描：每天{Settings.DailyTime.Replace(':','：')}＋登录补扫";
     public string BackgroundError {get;private set;}="";
     public string DataText=>$"数据：{Paths.DataDirectory}"+(Paths.IsFallback?"（备用位置）":"");
+    public string ConfigurationText=>$"配置（SQLite）：{Paths.DatabasePath}";
     public event EventHandler<int>? Reminder;
     public event PropertyChangedEventHandler? PropertyChanged;
     private void Notify(string name)=>PropertyChanged?.Invoke(this,new(name));

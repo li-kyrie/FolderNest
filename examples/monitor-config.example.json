@@ -1,0 +1,10 @@
+{
+  "Monitors": [
+    {
+      "Path": "D:\\下载暂存",
+      "Days": 30,
+      "DeleteMode": "RecycleBin",
+      "Enabled": true
+    }
+  ]
+}

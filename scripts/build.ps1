@@ -1,4 +1,4 @@
-param([switch]$Publish,[switch]$PackageOnly)
+﻿param([switch]$Publish,[switch]$PackageOnly)
 $ErrorActionPreference='Stop'
 $repoRoot=Split-Path -Parent $PSScriptRoot
 $localSdk=Join-Path $repoRoot '.tools\dotnet\dotnet.exe'
@@ -34,16 +34,23 @@ try {
         }
         Copy-Item README.md,CHANGELOG.md,LICENSE -Destination $publishDirectory
         Copy-Item docs -Destination $publishDirectory -Recurse -Force
+        Copy-Item examples -Destination $publishDirectory -Recurse -Force
         # Explicit allowlist: a locally launched application may have personal data beside its EXE.
         # Never include local databases, logs, configuration or SDK files in the distribution.
         if(-not $PackageOnly){
-            $running=Get-Process FolderNest -ErrorAction SilentlyContinue | Where-Object {$_.Path -eq (Join-Path $repoRoot 'FolderNest.exe')}
-            if($running){throw 'Close the root FolderNest.exe before updating the portable application'}
-            Copy-Item -LiteralPath $publishExe -Destination (Join-Path $repoRoot 'FolderNest.exe') -Force
-            Write-Host "Portable EXE: $repoRoot\FolderNest.exe"
+            $product=Join-Path $repoRoot '产品\FolderNest'
+            $running=Get-Process FolderNest -ErrorAction SilentlyContinue | Where-Object {$_.Path -eq (Join-Path $product 'FolderNest.exe')}
+            if($running){throw 'Close the product FolderNest.exe before updating it'}
+            New-Item -ItemType Directory -Path $product -Force | Out-Null
+            Copy-Item -LiteralPath @($publishExe,(Join-Path $publishDirectory 'README.md'),(Join-Path $publishDirectory 'CHANGELOG.md'),(Join-Path $publishDirectory 'LICENSE'),(Join-Path $publishDirectory 'docs'),(Join-Path $publishDirectory 'examples')) -Destination $product -Recurse -Force
+            Write-Host "Portable EXE: $product\FolderNest.exe"
         }
-        $package=Join-Path (Split-Path $repoRoot -Parent) "FolderNest-Portable-v$version-win-x64.zip"
-        Compress-Archive -LiteralPath @($publishExe,(Join-Path $publishDirectory 'README.md'),(Join-Path $publishDirectory 'CHANGELOG.md'),(Join-Path $publishDirectory 'LICENSE'),(Join-Path $publishDirectory 'docs')) -DestinationPath $package -Force
+        $packageDirectory=Join-Path $repoRoot '发布包'
+        New-Item -ItemType Directory -Path $packageDirectory -Force | Out-Null
+        $package=Join-Path $packageDirectory "FolderNest-Portable-v$version-win-x64.zip"
+        Compress-Archive -LiteralPath @($publishExe,(Join-Path $publishDirectory 'README.md'),(Join-Path $publishDirectory 'CHANGELOG.md'),(Join-Path $publishDirectory 'LICENSE'),(Join-Path $publishDirectory 'docs'),(Join-Path $publishDirectory 'examples')) -DestinationPath $package -Force
+        $hash=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
+        [System.IO.File]::WriteAllText($package+'.sha256',$hash+'  '+[System.IO.Path]::GetFileName($package)+[Environment]::NewLine)
         Write-Host "Staged EXE: $publishExe"
         Write-Host "Portable ZIP: $package"
     }
