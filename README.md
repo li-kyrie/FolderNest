@@ -85,6 +85,8 @@ Windows 任务名为 `FolderNest Daily` 和 `FolderNest Logon`，不带版本数
 
 主界面底部显示**实际数据位置**。退出程序后备份整个数据文件夹，不要只复制正在使用中的 DB。日志包含本机路径，不会自动上传；个人数据库/配置/日志不进入 Git 或便携包。
 
+本机已于 2026-11-05 完成切换：正式入口为 `D:\FolderNest\FolderNest.exe`，实际数据为 `D:\FolderNest\data`。原 2.0 记录和计时保留，旧程序/数据及任务 XML 备份在 `data/legacy-backup/upgrade-v2.1.0-20261105/`。不要再从开发产物 `artifacts/portable/` 启动旧版，以免操作旧数据副本。
+
 ## 升级与旧配置导入
 
 - 现有 2.0 SQLite 数据直接读取，保留目录 ID、启用状态及计时；不需要重新导入。旧的“参与自动扫描”字段不再使用，所有启用目录统一自动扫描。

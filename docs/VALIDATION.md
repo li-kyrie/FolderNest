@@ -11,7 +11,16 @@
 - 真实运行窗口的可访问控件树显示新说明、按钮及五列；但电脑使用工具返回画面与所选窗口不一致，因此不把该截图或点击结果记为视觉/交互通过。未通过 GUI 删除个人文件或重置个人计时。
 - 本机旧脚本 config.json、state.json、foldernest.log 已移动到 data/legacy-backup/script-v1-20261104，可恢复；真实目录及正在使用的 2.0 数据未改动。
 
-本机切换状态：旧版 artifacts/portable/FolderNest.exe 尚在运行，已请求用户正常退出。2.1.0 包可独立构建，但暂不替换该进程或迁移活动数据。核对现有库为 3 个监控、7 条观察记录；正式迁移需关闭旧版，备份整库并比较迁移前后配置及观察摘要，再切换根目录入口和计划。不能将发布包构建通过误写为本机升级已完成。
+### 本机切换完成 — 2026-11-05
+
+- 用户确认旧版已退出，并核实无 FolderNest 进程后进行切换。
+- 旧根目录 EXE、2.0 数据文件（不复制运行锁）及两条旧任务 XML 备份到 `data/legacy-backup/upgrade-v2.1.0-20261105/`；原 artifacts/portable/data-v2 数据仍保留。
+- 将原数据库与日志复制到根目录 `data/`，数据库文件哈希相同；配置/观察/设置的逻辑摘要相同，完整性检查为 ok。根目录 EXE 与已发布 2.1.0 成品哈希一致。
+- 从 `D:\FolderNest\FolderNest.exe` 启动，实际数据为 `D:\FolderNest\data`，窗口标题 2.1.0、进程可响应、数据库增量架构版本为 2。
+- 实际核对 `FolderNest Daily`、`FolderNest Logon` 均可用，目标为根目录 EXE，数据参数为根目录 data；每日触发为本地 02:00，登录补扫保留。
+- 由于此次显式迁移改变了数据路径，应用的异数据保护按预期跳过旧任务；在核对 XML 备份、旧目标路径/参数、新任务有效后，仅移除已禁用的两条旧 SID 任务。其他任务未改动。
+- 启动补扫后再次对比备份：3 个监控配置完全相同，原有 7 条观察记录（含计时和指纹）逐条完全相同；另发现 10 个新项目并正常建档，共 17 条。没有重置旧计时或清理真实文件。
+- 源码 v2.1.0 标签保持不变；本次仅补充本机切换验收说明，不改写已发布标签。
 
 完整测试/包构建：`./scripts/build.ps1 -Publish -PackageOnly`。组件渲染：`.tools/dotnet/dotnet.exe run --project tests/FolderNest.Desktop.Tests -c Release -- --render-ui artifacts/ui-renders-2.1.0`。
 
