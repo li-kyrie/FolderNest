@@ -49,7 +49,7 @@ public partial class App : Application
             var log=new RollingAuditLog(paths.LogPath,()=>repository.ReadSettings().LogLimitMiB);
             vm=new(repository,log,paths,manageSchedule:!e.Args.Contains("--smoke-test")&&!e.Args.Contains("--no-schedule"));
             window=new(vm); MainWindow=window;
-            log.Write("startup",$"FolderNest 2.1.1；数据：{paths.DataDirectory}");
+            log.Write("startup",$"FolderNest 2.2.0；数据：{paths.DataDirectory}");
             if(e.Args.Contains("--smoke-test"))
             {
                 window.Show();
@@ -92,6 +92,7 @@ public partial class App : Application
     public void ExitApplication()
     {
         if(vm?.IsBusy==true){MessageBox.Show("正在处理文件，请完成后再退出。","FolderNest");return;}
+        if(vm?.HasPendingEdits==true && MessageBox.Show(window!,"列表中有未确认的配置修改。退出将丢弃这些修改，继续使用原配置。是否退出？","未保存修改",MessageBoxButton.YesNo,MessageBoxImage.Warning,MessageBoxResult.No)!=MessageBoxResult.Yes)return;
         exiting=true;window?.Close();Shutdown();
     }
     protected override void OnExit(ExitEventArgs e)

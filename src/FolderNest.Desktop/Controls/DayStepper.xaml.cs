@@ -17,16 +17,37 @@ public partial class DayStepper : UserControl
         typeof(DayStepper),new FrameworkPropertyMetadata(30,FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
     public int Value { get => (int)GetValue(ValueProperty); set => SetValue(ValueProperty,value); }
     public DayStepper() => InitializeComponent();
+    public void ResetInput()
+    {
+        var binding=Editor.GetBindingExpression(TextBox.TextProperty)!;
+        Validation.ClearInvalid(binding);binding.UpdateTarget();
+    }
+    public bool CommitInput()
+    {
+        var binding=Editor.GetBindingExpression(TextBox.TextProperty)!;
+        var validation=new IntegerDaysRule().Validate(Editor.Text,CultureInfo.CurrentCulture);
+        if(!validation.IsValid)
+        {
+            Validation.MarkInvalid(binding,new ValidationError(new IntegerDaysRule(),binding,validation.ErrorContent,null));return false;
+        }
+        Validation.ClearInvalid(binding);
+        SetCurrentValue(ValueProperty,int.Parse(Editor.Text,CultureInfo.CurrentCulture));
+        // The nested editor must explicitly cross the UserControl and DataGrid binding boundary.
+        GetBindingExpression(ValueProperty)?.UpdateSource();
+        return !Validation.GetHasError(this);
+    }
+    private void OnLostFocus(object sender,KeyboardFocusChangedEventArgs e)=>CommitInput();
     private void Step(int delta)
     {
-        Editor.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
-        if(Validation.GetHasError(Editor))return;
+        if(!CommitInput())return;
         SetCurrentValue(ValueProperty,Math.Clamp(Value+delta,1,36500));
+        GetBindingExpression(ValueProperty)?.UpdateSource();
     }
     private void Increase(object sender,RoutedEventArgs e) => Step(1);
     private void Decrease(object sender,RoutedEventArgs e) => Step(-1);
     private void OnKeyDown(object sender,KeyEventArgs e)
     {
         if(e.Key is Key.Up or Key.Down) { Step(e.Key==Key.Up ? 1 : -1); e.Handled=true; }
+        else if(e.Key==Key.Enter){CommitInput();e.Handled=true;}
     }
 }

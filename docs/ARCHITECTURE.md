@@ -1,4 +1,4 @@
-# FolderNest 2.1.1 架构
+# FolderNest 2.2.0 架构
 
 2026-11-04。唯一运行框架为 C# / .NET 10 + WPF + SQLite。WinForms 仅用于 NotifyIcon，Microsoft.VisualBasic.FileIO 用于系统删除适配，均在同一自包含 EXE 内。无旧 PowerShell 运行依赖。
 
@@ -18,7 +18,8 @@
 | Infrastructure | PortablePaths、RollingAuditLog、MonitorConfigImporter | 便携路径、总额日志、监控 JSON 严格校验与兼容转换 |
 | Desktop | ImportPreviewWindow | 导入前只读预览，确认后新增，不同步源 JSON |
 | Desktop | App | WinExe、图标、单实例/数据锁、托盘、Dispatcher 轮询 |
-| Desktop | MainViewModel、MonitorRow | 配置状态、串行门控、自动调度、合法编辑、稳定行对象 |
+| Desktop | MainViewModel、MonitorRow | 已生效配置/草稿分离、显式确认、事务保存、串行门控、自动调度、合法编辑、稳定行对象 |
+| Desktop | MonitorEditConfirmationWindow | 原值→新值确认，明确天数缩短和路径变更的计时影响，默认聚焦返回编辑 |
 | Desktop | MainWindow、Dialogs、MonitorActions、Controls | 目录管理、选择保持、排序、添加/删除/重置/设置/到期清单和整数微调 |
 
 ## 生命周期
@@ -31,6 +32,10 @@
 6. ApplyActivity 先刷新对应一级单元 LastActivity，再完整枚举/提交。观察队列约 10000 上限，溢出保守刷新并重扫。扫描、重置、清理共用 SemaphoreSlim；配置/排序在 Dispatcher 空闲时提交。
 7. 到指定时间、当天未提醒、当轮成功扫描存在到期项才通知。最近提醒日期保存，清单不持久冻结，不追催。
 8. 用户打开清单重扫，选择/模式覆盖/二次确认后构造 CleanupRequest。成功删除才移除记录，失败留记录；扫描/提醒不调用清理。
+
+到期清单的高亮行选择与清理复选框独立。“在资源管理器中显示”只接受单行高亮项，先验证绝对路径和存在性，再在工作线程通过 Windows Shell PIDL 定位其父目录中的原项；不拼接命令行、不执行文件或快捷方式目标。定位期间禁止重复请求，清理期间不可定位，失败以内联文字显示，不改配置、计时或勾选。
+
+到期路径显示模板将原始完整路径拆为所属监控目录前缀和余下部分，分别使用加粗/常规 Run，以 OneWay 绑定呈现；只匹配目录边界，兼容大小写、尾分隔符和不同斜杠，不把同名前缀的相邻目录误加粗。显示保留原始字符和大小写，长路径换行，工具提示与可访问名称提供完整路径；筛选、排序、剪贴板及清理始终使用未修改的原始 Path。此改动不写数据库。
 
 ## 加入、停用、移除、重置
 
@@ -45,6 +50,10 @@
 截止时间为 max(FirstSeenUtc, LastActivityUtc) + RetentionDays。关机时只是截止时间继续推进，不可能实际扫描；未运行期间的真实进入时刻不可恢复，首次发现保守开始。
 
 ## 排序与选择
+
+列表内编辑只更新 MonitorRow 草稿，Definition 仍指向已保存配置。DayStepper 显式将整数输入跨 UserControl/DataGrid 绑定提交到草稿，避免输入留在控件却未传递到配置。确认按钮先收集当前编辑器输入、校验全部草稿并预览差异，用户确认后通过 SaveMonitors 在同一 SQLite 事务保存；失败回滚配置和路径计时清除，保留草稿，不显示成功。提交后才 Accept 行并弹“配置已保存生效”；日志/监听异常以附加警告显示，不把成功提交误报为未保存。
+
+取消修改还原草稿和无效输入。手动命令遇到未确认修改会先提示，后台扫描始终读取数据库中的旧配置，不受草稿启停/天数影响。仅路径更换清除旧观察，保留天数/启停/删除模式修改不重置时间锚点。
 
 monitor_order 表独立保存顺序，迁移缺失条目按原 rowid 排列；SaveOrder 在事务中校验完整 ID 集合，拒绝丢项/重复/失效列表。排序不重写计时。
 

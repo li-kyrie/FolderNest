@@ -5,11 +5,9 @@
  x:Name="Root">
   <Grid>
     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="22"/></Grid.ColumnDefinitions>
-    <TextBox x:Name="Editor" VerticalContentAlignment="Center" PreviewKeyDown="OnKeyDown" AutomationProperties.Name="保留天数">
+    <TextBox x:Name="Editor" VerticalContentAlignment="Center" PreviewKeyDown="OnKeyDown" LostKeyboardFocus="OnLostFocus" AutomationProperties.Name="保留天数">
       <TextBox.Text>
-        <Binding Path="Value" ElementName="Root" UpdateSourceTrigger="LostFocus" ValidatesOnExceptions="True" NotifyOnValidationError="True">
-          <Binding.ValidationRules><local:IntegerDaysRule/></Binding.ValidationRules>
-        </Binding>
+        <Binding Path="Value" ElementName="Root" Mode="OneWay"/>
       </TextBox.Text>
     </TextBox>
     <Grid Grid.Column="1">

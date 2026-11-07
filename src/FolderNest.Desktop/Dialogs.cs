@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Documents;
 using FolderNest.Core;
 using FolderNest.Desktop.Controls;
 using Microsoft.Win32;
@@ -109,7 +110,7 @@ public sealed class SettingsWindow : Window
 public sealed class ReviewWindow : Window
 {
     private bool running;
-    public ReviewWindow(MainViewModel vm,IReadOnlyList<DueItem> items)
+    public ReviewWindow(MainViewModel vm,IReadOnlyList<DueItem> items,Action<string>? revealInExplorer=null)
     {
         Title="FolderNest · 确认到期清理";Width=1050;Height=560;MinWidth=760;MinHeight=380;
         WindowStartupLocation=WindowStartupLocation.CenterOwner;
@@ -118,17 +119,36 @@ public sealed class ReviewWindow : Window
         var view=CollectionViewSource.GetDefaultView(rows);
         var header=new StackPanel();DockPanel.SetDock(header,Dock.Top);panel.Children.Add(header);
         header.Children.Add(new TextBlock {Text="取消勾选本次不清理的项目。一级子文件夹按整体清理；执行前会再次校验变化。",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(3,0,3,8)});
+        header.Children.Add(new TextBlock {Text="高亮选中一行后可在资源管理器中显示；高亮选择与左侧清理勾选互不影响。",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(3,0,3,8)});
         var tools=new WrapPanel();header.Children.Add(tools);
         var filter=new TextBox {Width=230,MinHeight=28,Margin=new Thickness(4),VerticalContentAlignment=VerticalAlignment.Center};
         System.Windows.Automation.AutomationProperties.SetName(filter,"筛选到期项目路径");
         tools.Children.Add(new Label {Content="筛选路径",Target=filter});tools.Children.Add(filter);
         filter.TextChanged+=(_,_)=>{view.Filter=o=>((ReviewRow)o).Path.Contains(filter.Text,StringComparison.OrdinalIgnoreCase);view.Refresh();};
-        var grid=new DataGrid {ItemsSource=view,AutoGenerateColumns=false,CanUserAddRows=false,CanUserDeleteRows=false,SelectionMode=DataGridSelectionMode.Extended};
+        var grid=new DataGrid {ItemsSource=view,AutoGenerateColumns=false,CanUserAddRows=false,CanUserDeleteRows=false,SelectionMode=DataGridSelectionMode.Extended,SelectionUnit=DataGridSelectionUnit.FullRow};
+        var reveal=DialogUi.Button("在资源管理器中显示",()=>{});reveal.IsEnabled=false;
+        reveal.ToolTip="请高亮选中一个项目；只定位文件或文件夹，不改变清理勾选。";
+        ToolTipService.SetShowOnDisabled(reveal,true);tools.Children.Add(reveal);
+        bool revealing=false;
+        void UpdateReveal()=>reveal.IsEnabled=!revealing&&grid.SelectedItems.Count==1;
+        grid.SelectionChanged+=(_,_)=>UpdateReveal();
         tools.Children.Add(DialogUi.Button("勾选筛选项",()=>{foreach(ReviewRow r in view)r.Selected=true;grid.Items.Refresh();}));
         tools.Children.Add(DialogUi.Button("取消全部勾选",()=>{foreach(var r in rows)r.Selected=false;grid.Items.Refresh();}));
         var mode=new ComboBox {ItemsSource=new[]{"使用各目录默认","本次全部回收站","本次全部永久删除"},SelectedIndex=0,MinWidth=160,Margin=new Thickness(4)};tools.Children.Add(mode);
         var footer=new StackPanel();DockPanel.SetDock(footer,Dock.Bottom);panel.Children.Add(footer);
         var resultText=new TextBox {IsReadOnly=true,TextWrapping=TextWrapping.Wrap,MaxHeight=85,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,BorderThickness=new Thickness(0),Margin=new Thickness(3,6,3,3)};footer.Children.Add(resultText);
+        reveal.Click+=async (_,_)=>
+        {
+            if(running||revealing||grid.SelectedItems.Count!=1||grid.SelectedItem is not ReviewRow row)return;
+            revealing=true;UpdateReveal();resultText.Text="正在资源管理器中定位…";
+            try
+            {
+                await System.Threading.Tasks.Task.Run(()=>ExplorerReveal.Show(row.Path,revealInExplorer));
+                resultText.Text="已请求资源管理器显示："+row.Path;
+            }
+            catch(Exception ex){resultText.Text="无法在资源管理器中显示："+ex.Message;}
+            finally{revealing=false;UpdateReveal();}
+        };
         var buttons=new StackPanel {Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};footer.Children.Add(buttons);
         var execute=DialogUi.Button("确认清理已勾选项目",()=>{});buttons.Children.Add(execute);
         var close=DialogUi.Button("关闭",()=>Close());close.IsCancel=true;buttons.Children.Add(close);
@@ -138,11 +158,26 @@ public sealed class ReviewWindow : Window
         checkbox.SetValue(System.Windows.Automation.AutomationProperties.NameProperty,"勾选本次清理");checkTemplate.VisualTree=checkbox;
         grid.Columns.Add(new DataGridTemplateColumn {Header="清理",CellTemplate=checkTemplate,Width=55});
         void Column(string title,string property,DataGridLength width)=>grid.Columns.Add(new DataGridTextColumn {Header=title,Binding=new Binding(property),IsReadOnly=true,Width=width});
-        Column("到期项目",nameof(ReviewRow.Path),new(1,DataGridLengthUnitType.Star));
+        var pathTemplate=new DataTemplate();var pathText=new FrameworkElementFactory(typeof(TextBlock));
+        pathText.SetValue(TextBlock.TextWrappingProperty,TextWrapping.Wrap);
+        pathText.SetValue(FrameworkElement.MarginProperty,new Thickness(4,3,4,3));
+        pathText.SetBinding(FrameworkElement.ToolTipProperty,new Binding(nameof(ReviewRow.Path)));
+        pathText.SetBinding(System.Windows.Automation.AutomationProperties.NameProperty,new Binding(nameof(ReviewRow.Path)));
+        var monitorPart=new FrameworkElementFactory(typeof(Run));
+        monitorPart.SetValue(TextElement.FontWeightProperty,FontWeights.Bold);
+        monitorPart.SetBinding(Run.TextProperty,new Binding(nameof(ReviewRow.MonitorPathPrefix)){Mode=BindingMode.OneWay});
+        var itemPart=new FrameworkElementFactory(typeof(Run));
+        itemPart.SetValue(TextElement.FontWeightProperty,FontWeights.Normal);
+        itemPart.SetBinding(Run.TextProperty,new Binding(nameof(ReviewRow.ItemPathSuffix)){Mode=BindingMode.OneWay});
+        pathText.AppendChild(monitorPart);pathText.AppendChild(itemPart);pathTemplate.VisualTree=pathText;
+        grid.Columns.Add(new DataGridTemplateColumn {Header="到期项目（监控目录加粗）",CellTemplate=pathTemplate,
+            IsReadOnly=true,Width=new(1,DataGridLengthUnitType.Star),SortMemberPath=nameof(ReviewRow.Path),
+            ClipboardContentBinding=new Binding(nameof(ReviewRow.Path))});
         Column("大小 MiB",nameof(ReviewRow.Size),85);Column("到期时间",nameof(ReviewRow.Due),140);Column("默认方式",nameof(ReviewRow.Mode),90);
         panel.Children.Add(grid);
         execute.Click+=async (_,_)=>
         {
+            if(revealing){resultText.Text="请等待资源管理器定位完成后再清理。";return;}
             if(running)return;grid.CommitEdit();grid.CommitEdit(DataGridEditingUnit.Row,true);
             var selected=rows.Where(r=>r.Selected).Select(r=>r.Item).ToArray();
             if(selected.Length==0){resultText.Text="请勾选至少一个项目。";return;}
@@ -166,9 +201,22 @@ public sealed class ReviewWindow : Window
     }
     private sealed class ReviewRow(DueItem item)
     {
+        private readonly int prefixLength=MonitorPrefixLength(item);
         public DueItem Item=>item;public bool Selected {get;set;}=true;public string Path=>item.Observation.Path;
+        public string MonitorPathPrefix=>Path[..prefixLength];
+        public string ItemPathSuffix=>Path[prefixLength..];
         public string Size=>(item.Observation.Size/1048576d).ToString("N2");
         public string Due=>item.DueAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
         public string Mode=>item.Monitor.DeletionMode==DeletionMode.RecycleBin?"回收站":"永久删除";
+        private static int MonitorPrefixLength(DueItem value)
+        {
+            // Match a complete directory boundary, never a similarly named sibling.
+            // Slice the original path so casing, Unicode and clipboard content remain intact.
+            var root=value.Monitor.Path.TrimEnd('\\','/');
+            var path=value.Observation.Path;
+            if(root.Length==0||path.Length<root.Length||
+               !path[..root.Length].Replace('/','\\').Equals(root.Replace('/','\\'),StringComparison.OrdinalIgnoreCase))return 0;
+            return path.Length==root.Length||path[root.Length] is '\\' or '/'?root.Length:0;
+        }
     }
 }

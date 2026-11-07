@@ -34,7 +34,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         cleanup=new(repository,new LocalFileInventory(),new WindowsFileDeletion(),new SystemClock(),log);
         reset=new(repository,new LocalFileInventory(),new SystemClock(),log);
         tasks=scheduler??new WindowsTaskScheduler(paths.DataDirectory,log,expectedDailyTime:()=>Settings.Schedule.DailyTime);
-        foreach(var m in repository.GetMonitors())Monitors.Add(new(m,Save));
+        foreach(var m in repository.GetMonitors())Monitors.Add(CreateRow(m));
         tracker.Changed+=(_,e)=>
         {
             if(activity.Count>=10000)Interlocked.Exchange(ref lostEvents,1);
@@ -48,6 +48,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public bool IsBusy=>busy;
     public bool IsIdle=>!busy;
     public bool HasMonitors=>Monitors.Count>0;
+    public bool HasPendingEdits=>Monitors.Any(r=>r.HasPendingChanges||r.HasErrors);
+    public string EditNotice=>HasPendingEdits?"有未确认修改：请点击“确认修改”或“取消修改”。扫描和后台仍使用已保存配置。":"直接编辑后，请点击“确认修改”；弹出“配置已保存生效”才表示保存成功。";
     public string BackgroundText=>$"后台扫描：每天{Settings.DailyTime.Replace(':','：')}＋登录补扫";
     public string BackgroundError {get;private set;}="";
     public string DataText=>$"数据：{Paths.DataDirectory}"+(Paths.IsFallback?"（备用位置）":"");
@@ -95,11 +97,44 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
            MonitorValidation.IsWithin(m.Path,app)||MonitorValidation.IsWithin(app,m.Path))
             throw new ArgumentException("不能监控程序或数据文件夹、其子目录或上级目录。");
     }
-    private void Save(MonitorDefinition m)
+    private MonitorRow CreateRow(MonitorDefinition m)
     {
-        EnsureIdle();Validate(m);repository.SaveMonitor(m);
-        log.Write("monitor-save",$"{m.Path}；{m.RetentionDays}天；{m.DeletionMode}；启用={m.Enabled}");
-        Rewatch();lastScan=DateTimeOffset.MinValue;Status="配置已保存";
+        var row=new MonitorRow(m,Validate);
+        row.PropertyChanged+=(_,_)=>{Notify(nameof(HasPendingEdits));Notify(nameof(EditNotice));};
+        return row;
+    }
+    public IReadOnlyList<MonitorRow> PrepareEdits()
+    {
+        EnsureIdle();
+        if(Monitors.Any(r=>r.HasErrors))throw new ArgumentException("修改中有无效值，请先修正红框提示。");
+        var rows=Monitors.Where(r=>r.HasPendingChanges).ToArray();
+        if(rows.Length==0)throw new ArgumentException("没有待确认的配置修改。");
+        foreach(var row in rows)Validate(row.Candidate);
+        var final=Monitors.Select(r=>r.Candidate).ToArray();
+        foreach(var m in final)foreach(var other in final.Where(x=>x.Id!=m.Id))
+            if(MonitorValidation.IsWithin(m.Path,other.Path)||MonitorValidation.IsWithin(other.Path,m.Path))
+                throw new ArgumentException("修改后的目录存在重复或相互包含，请调整路径。");
+        return rows;
+    }
+    public void ApplyEdits()
+    {
+        var rows=PrepareEdits();
+        Status="正在保存配置…";
+        try{repository.SaveMonitors(rows.Select(r=>r.Candidate).ToArray());}
+        catch(Exception ex){Status="配置保存失败，修改未生效："+ex.Message;throw;}
+        // SQLite commit must succeed before the UI can call these edits effective.
+        foreach(var row in rows)row.Accept(row.Candidate);
+        string? warning=null;
+        foreach(var row in rows)
+            try{log.Write("monitor-save",$"{row.Definition.Path}；{row.Definition.RetentionDays}天；{row.Definition.DeletionMode}；启用={row.Definition.Enabled}；用户确认保存");}
+            catch(Exception ex){warning="日志写入失败："+ex.Message;}
+        try{Rewatch();}catch(Exception ex){warning="文件监听刷新失败，仍可扫描："+ex.Message;}
+        lastScan=DateTimeOffset.MinValue;
+        Status="配置已保存生效"+(warning is null?"":"；"+warning);
+    }
+    public void CancelEdits()
+    {
+        EnsureIdle();foreach(var row in Monitors)row.CancelEdit();Status="已取消修改，继续使用原配置";
     }
     private void Rewatch()=>tracker.Watch(repository.GetMonitors(),log);
     public async Task<MonitorRow> AddAsync(MonitorDefinition monitor)
@@ -116,7 +151,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             repository.SaveMonitor(monitor);
             try{repository.ReplaceObservations(monitor.Id,observations);}
             catch {repository.RemoveMonitor(monitor.Id);throw;}
-            var row=new MonitorRow(monitor,Save);Monitors.Add(row);
+            var row=CreateRow(monitor);Monitors.Add(row);
             repository.SaveOrder(Monitors.Select(r=>r.Id).ToArray());
             log.Write("monitor-add",$"{monitor.Path}；加入={joined:O}；初始 {observations.Length} 项；启用={monitor.Enabled}");
             SynchronizeSchedule();lastScan=DateTimeOffset.MinValue;sweepDay=null;
@@ -127,6 +162,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public void Toggle(IReadOnlyList<MonitorRow> rows)
     {
         EnsureIdle();if(rows.Count==0)throw new ArgumentException("请先选择监控目录。");
+        if(HasPendingEdits)throw new ArgumentException("请先确认或取消列表内的配置修改。");
         bool enabled=rows.Any(r=>!r.Enabled);
         foreach(var row in rows)
         {
@@ -254,7 +290,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         try
         {
             if(DateTimeOffset.UtcNow>=nextTaskCheck)SynchronizeSchedule();
-            if(!Monitors.Any(m=>m.Enabled))return;
+            if(!repository.GetMonitors().Any(m=>m.Enabled))return;
             var today=DateOnly.FromDateTime(DateTime.Now);
             bool daily=TimeOnly.FromDateTime(DateTime.Now)>=Settings.Schedule.DailyTime&&sweepDay!=today;
             bool periodic=DateTimeOffset.UtcNow-lastScan>=TimeSpan.FromMinutes(15);

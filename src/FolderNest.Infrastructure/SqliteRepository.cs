@@ -53,9 +53,13 @@ public sealed class SqliteRepository : IMonitorRepository
         return result;
     }
 
-    public void SaveMonitor(MonitorDefinition monitor)
+    public void SaveMonitor(MonitorDefinition monitor)=>SaveMonitors([monitor]);
+
+    public void SaveMonitors(IReadOnlyList<MonitorDefinition> monitors)
     {
         using var c = Open(); using var tx = c.BeginTransaction();
+        foreach(var monitor in monitors)
+        {
         using var read = c.CreateCommand(); read.Transaction = tx;
         read.CommandText = "SELECT payload FROM monitors WHERE id=$id";
         read.Parameters.AddWithValue("$id", monitor.Id.ToString());
@@ -70,7 +74,9 @@ public sealed class SqliteRepository : IMonitorRepository
         using var cmd = c.CreateCommand(); cmd.Transaction = tx;
         cmd.CommandText = "INSERT INTO monitors(id,payload) VALUES($id,$payload) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload";
         cmd.Parameters.AddWithValue("$id", monitor.Id.ToString());
-        cmd.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(monitor)); cmd.ExecuteNonQuery(); tx.Commit();
+        cmd.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(monitor)); cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
     }
 
     public void RemoveMonitor(Guid id)

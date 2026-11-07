@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using FolderNest.Core;
 using FolderNest.Infrastructure;
+using FolderNest.Desktop.Controls;
 using Microsoft.Win32;
 
 namespace FolderNest.Desktop;
@@ -13,14 +14,16 @@ namespace FolderNest.Desktop;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel vm;
+    private readonly Func<IReadOnlyList<MonitorRow>,bool>? confirmEdits;
+    private readonly Action? editsSaved;
     private bool reviewing;
     private Point? dragStart;
     private MonitorRow? dragRow;
     private MonitorRow[] dragSelection=[];
     private const string RowDragFormat="FolderNest.MonitorRow";
-    public MainWindow(MainViewModel vm)
+    public MainWindow(MainViewModel vm,Func<IReadOnlyList<MonitorRow>,bool>? confirmEdits=null,Action? editsSaved=null)
     {
-        this.vm=vm;
+        this.vm=vm;this.confirmEdits=confirmEdits;this.editsSaved=editsSaved;
         Resources["EnabledOptions"]=new[]{new KeyValuePair<string,bool>("启用",true),new("停用",false)};
         Resources["DeletionOptions"]=new[]{new KeyValuePair<string,DeletionMode>("回收站",DeletionMode.RecycleBin),new("永久删除",DeletionMode.Permanent)};
         InitializeComponent();DataContext=vm;Closing+=OnClosing;
@@ -45,11 +48,45 @@ public partial class MainWindow : Window
         for(int i=0;i<VisualTreeHelper.GetChildrenCount(obj);i++)if(HasValidationError(VisualTreeHelper.GetChild(obj,i)))return true;
         return false;
     }
-    private void CommitEdits()
+    private static IEnumerable<T> Descendants<T>(DependencyObject obj) where T:DependencyObject
     {
+        for(int i=0;i<VisualTreeHelper.GetChildrenCount(obj);i++)
+        {
+            var child=VisualTreeHelper.GetChild(obj,i);
+            if(child is T found)yield return found;
+            foreach(var nested in Descendants<T>(child))yield return nested;
+        }
+    }
+    private void CommitEdits(bool allowPending=false)
+    {
+        foreach(var stepper in Descendants<DayStepper>(MonitorGrid))
+            if(!stepper.CommitInput())throw new ArgumentException("请将天数修正为 1–36500 的整数。");
         if(!MonitorGrid.CommitEdit(DataGridEditingUnit.Cell,true)||!MonitorGrid.CommitEdit(DataGridEditingUnit.Row,true)||
            HasValidationError(MonitorGrid)||vm.Monitors.Any(r=>r.HasErrors))
             throw new ArgumentException("存在未保存的无效修改，请修正红框内的值（路径编辑可用 Esc 撤销）。");
+        if(!allowPending&&vm.HasPendingEdits)throw new ArgumentException("列表中有未确认修改，请先点击“确认修改”或“取消修改”。");
+    }
+    private void ConfirmEdits_Click(object sender,RoutedEventArgs e)
+    {
+        var rows=Selection();var current=MonitorGrid.CurrentItem;
+        try
+        {
+            CommitEdits(true);var pending=vm.PrepareEdits();
+            var accepted=confirmEdits?.Invoke(pending)??(new MonitorEditConfirmationWindow(pending){Owner=this,Icon=Icon}.ShowDialog()==true);
+            if(!accepted)return;
+            vm.ApplyEdits();
+            if(editsSaved is not null)editsSaved();
+            else MessageBox.Show(this,vm.Status,"FolderNest",MessageBoxButton.OK,MessageBoxImage.Information);
+        }
+        catch(Exception ex){Error(ex);}finally{PreserveSelection(rows,current);}
+    }
+    private void CancelEdits_Click(object sender,RoutedEventArgs e)
+    {
+        var rows=Selection();var current=MonitorGrid.CurrentItem;
+        try{MonitorGrid.CancelEdit(DataGridEditingUnit.Cell);MonitorGrid.CancelEdit(DataGridEditingUnit.Row);vm.CancelEdits();
+            foreach(var stepper in Descendants<DayStepper>(MonitorGrid))
+            {stepper.GetBindingExpression(DayStepper.ValueProperty)?.UpdateTarget();stepper.ResetInput();}}
+        catch(Exception ex){Error(ex);}finally{PreserveSelection(rows,current);}
     }
     private void Error(Exception ex){vm.Status=ex.Message;MessageBox.Show(this,ex.Message,"FolderNest");}
     private void Run(Action action)
